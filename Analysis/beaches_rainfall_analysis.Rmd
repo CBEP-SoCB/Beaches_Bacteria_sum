@@ -1,0 +1,417 @@
+---
+title: "Impact of Rainfall on Bacteria Levels at Casco Bay Beaches"
+author: "Curtis C. Bohlen, Casco Bay Estuary Partnership."
+date: "01/23/2021"
+output:
+  github_document:
+    toc: true
+    fig_width: 5
+    fig_height: 4
+---
+<img
+    src="https://www.cascobayestuary.org/wp-content/uploads/2014/04/logo_sm.jpg"
+    style="position:absolute;top:10px;right:50px;" />
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.align = 'center',
+                      fig.width = 5, fig.height = 4,
+                      collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+To be added....
+
+## Standards
+104 CFU / 100 ml, for individual observations.
+
+# Import Libraries  
+```{r import_libraries}
+library(fitdistrplus)
+library(tidyverse)
+
+# library(GGally)
+
+library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
+library(emmeans)   # For marginal means
+
+library(CBEPgraphics)
+load_cbep_fonts()
+theme_set(theme_cbep())
+
+library(LCensMeans)
+```
+
+# Data Preparation
+## Initial Folder References
+```{r folders}
+sibfldnm    <- 'Derived_Data'
+parent      <- dirname(getwd())
+sibling     <- file.path(parent,sibfldnm)
+
+#dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
+#dir.create(file.path(getwd(), 'models'),  showWarnings = FALSE)
+```
+
+## Load Data
+```{r load_data}
+fn <- "beaches_data.csv"
+beach_data <- read_csv(file.path(sibling, fn))
+```
+
+```{r}
+names(beach_data)
+```
+
+##  Add a "Beach" Identifier
+```{r add_beach}
+fn = "beach_locations.csv"
+beach_lookup = read_csv(file.path(sibling, fn),
+                        col_types = cols(
+                          Town = col_character(),
+                          Beach_Name = col_character(),
+                          SamplePoint = col_character(),
+                          Latitude = col_double(),
+                          Longitude = col_double()
+                        )) %>%
+  select(-Latitude, -Longitude)
+
+beach_data <- beach_data %>%
+  mutate(Beach = beach_lookup$Beach_Name[match(SiteCode, 
+                                               beach_lookup$SamplePoint)])
+```
+
+
+## Add a "Day of the Week" Identifier
+We need this to help evaluate whether samples are "normal" samples or "storm"
+samples.
+```{r add_day}
+beach_data <- beach_data %>%
+  mutate(Weekday = weekdays(sdate)) %>%
+  relocate(Weekday, .after = Month)
+```
+
+
+## Normal and Conditional Samples
+The Beaches program principally collects samples from each beach on specific
+days of the week.  Samples collected on other days may be "non-standard" 
+samples. For example, protocol after a beach closure is to test a few days
+later to see if levels of bacteria have returned to safe levels.  We should not 
+expect such conditional samples to have the same distribution of bacteria levels
+as normal samples.
+
+Unfortunately, records are not entirely reliable on this matter, so the best
+we can do is figure out if samples were collected on a "normal" day of the week.
+
+We look at Crosstabs by year to figure out the pattern.
+```{r table_by_day}
+dow <- xtabs(~Year + Weekday + Beach , data = beach_data)
+dow
+```
+
+### Results
+
+Beach                      | Years          | Principal Days of the Week       
+---------------------------|----------------|--------------------------  
+ Broad Cove Reserve        | 2016 - Present | Wednesday              
+ East End Beach (to 2015)  | 2000 - 2015    | Monday, Wednesday, Friday  
+ East End Beach (Recent)   | 2016 - Present | Tuesday, Thursday  
+ Mackerel Cove             | 2018           | Monday, Wednesday (?)  
+ Mackerel Cove             | 2019           | Monday  
+ Mitchell Field Beach      | 2018           | Monday, Wednesday (?)  
+ Mitchell Field Beach      | 2019           | Monday  
+ Stovers Point Preserve    | 2018           | Monday, Wednesday (?)  
+ Stovers Point Preserve    | 2019           | Monday  
+ Willard Beach             | 2003 - 2010    | Monday, Wednesday (?)  
+ Willard Beach             | 2013 - Present | Monday, Wednesday  
+ Winslow Park              | 2008 - 2009    | Monday  
+ Winslow Park              | 2010 - 2011    | Monday, Thursday  
+ Winslow Park              | 2012 - 2013    | Monday, Wednesday (?)  
+ Winslow Park              | 2014 - 2015    | Monday  
+
+### Add The Indicator
+We create a `FALSE` variable, and then go through site by site, flipping the 
+value to `TRUE` when appropriate.  This code may not be appropriate for
+future data sets, as it is tailored to the exceptions in the current record.
+```{r add_normal}
+beach_data <- beach_data %>%
+  mutate(normal_flag = FALSE,
+         normal_flag = if_else(Beach == 'Broad Cove Reserve' & 
+                                Weekday == 'Wednesday',
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'East End Beach' & 
+                                Year < 2016 &
+                                Weekday %in% c('Monday', 'Wednesday', 'Friday'),
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'East End Beach' & 
+                                Year >= 2016 &
+                                Weekday %in% c('Tuesday', 'Thursday'),
+                                TRUE, normal_flag),
+          # The only "extras" at Mackerel Cove are on Thursday
+         normal_flag = if_else(Beach == 'Mackerel Cove' & 
+                                Weekday !=  'Thursday',   
+                                TRUE, normal_flag),
+          # At Mitchel lField, we just pick out the two "extras"
+         normal_flag = if_else(Beach == 'Mitchell Field Beach' & 
+                               (Year == 2018 & Weekday !=  'Thursday') |  
+                                 (Year == 2019 & Weekday != 'Wednesday'),
+                                TRUE, normal_flag),
+        # The only "extras" at Stovers Point are on Thursday
+         normal_flag = if_else(Beach == 'Stovers Point Preserve' & 
+                                Weekday !=  'Thursday',   
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'Willard Beach' & 
+                               Weekday %in% c('Monday', 'Wednesday'),
+                                TRUE, normal_flag),
+        # At Winslow, it's not clear if any of the samples were exceptional
+        # samples, so we treat them all as regular samples.
+         normal_flag = if_else(Beach == 'Winslow Park', 
+                                TRUE, normal_flag)) %>%
+    relocate(normal_flag, .after = Weekday)
+```
+
+## Add Maximum Likelihood Estimate for non-detects
+This uses our `LCensMeans` package, and estimates a maximum likelihood estimate
+of the expected value of the (unobserved) left censored values.  It relies
+on several assumption that are questionable for these data, but it is arguably
+better than using the detection limit or half the detection limit.
+```{r handle_non-detects}
+beach_data <- beach_data %>%
+mutate(Bacteria2 = sub_cmeans(Bacteria, Censored_Flag) )
+```
+
+
+## Calculate Exceedences
+```{r calculate_exceedences}
+beach_data <- beach_data %>%
+  mutate(Exceeds = Bacteria > 104) %>%
+  relocate(Exceeds, .after = Censored_Flag)
+```
+
+# Recent Data
+```{r summary_table}
+recent_data <- beach_data %>%
+  filter(Year > 2015)
+
+recent_data %>%
+  group_by(SiteCode) %>%
+  summarize( years = length(unique(Year)),
+             median_Bacteria = median(Bacteria2, na.rm = TRUE),
+             gmean_bacteria = exp(mean(log(Bacteria2),nas.rm = TRUE)),
+             mean_Bacteria = mean(Bacteria2, na.rm = TRUE),
+             n = sum(! is.na(Bacteria)),
+             n_exceeds = sum(Exceeds, na.rm = TRUE),
+             p_exceeds = n_exceeds / n)
+```
+
+
+## Analysis of Bacteria MPN Data
+### Log Linear Models
+#### Base Model
+Although we think a simple linear model is somewhat inappropriate given the
+skewed data (even log transformed, to focus on geometric means, the data remains 
+highly skewed),  we look at them  anyway as a starting point for analysis.
+
+```{r base_lm}
+base_lm <- lm(log(Bacteria) ~ SiteCode, data = recent_data)
+plot(base_lm)
+```
+#### Linear in Rainfall
+```{r lm_w_rain}
+rain_lm <- lm(log(Bacteria) ~ SiteCode + Rain48, data = recent_data)
+plot(rain_lm)
+```
+
+#### Log(rain + 1) model
+```{r lm_log_rain}
+lograin_lm <- lm(log(Bacteria) ~ SiteCode + log1p(Rain48), data = recent_data)
+plot(lograin_lm)
+```
+
+```{r}
+AIC(rain_lm)
+AIC(lograin_lm)
+```
+
+Incorporating a rainfall predictor helps address the extreme outliers. Sample
+sizes are moderately large, and model diagnostics show no high leverage points.
+However, there is a moderate remaining remaining relationship between location
+and scale. We should not take the details too seriously. The model based on 
+a log transform of rainfall performs slightly better, but most samples had no 
+recent rainfall.
+
+```{r}
+anova(lograin_lm)
+``` 
+
+```{r}
+(emms <- emmeans(lograin_lm, "SiteCode", type = 'response'))
+```
+```{r plot_lm_log_rain}
+plot(emms) + 
+  xlab('Enteroccocci\n(MPN / 100 ml)') +
+  coord_flip() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25))
+```
+
+
+### GLM Analysis
+We review a GLMs that can better handle the remaining dependency between means
+and variances.  The Gamma GLM implies a relationship where the variance scales
+as the square of the mean, while the inverse gaussian implies a relationship
+where variance scales linearly with the mean. Our scale-location relationship
+looks close to linear, but in practice the inverse gaussian GLMs performed
+poorly (based on diagnostic plots).
+
+One issue is that both Gamma and Inverse Gaussian models only permit positive
+values.  Our log transformed data (at least in principle) could include negative
+values, if any of our original observations were below 1.  That did not happen.
+
+Our original data were quasi-count data, with a positive detection limit 
+(usually 10, sometimes 1). We prefer to replace non-detects with an estimate of conditional expected value.  In principal, that that value could be below 1, but
+that was never the case for our recent data, where the lower detection limit did 
+not occur.
+
+#### Gamma GLM
+```{r gamma_glm}
+gamma_glm <- glm(log(Bacteria) ~ SiteCode + log1p(Rain48), 
+                family = Gamma(), 
+                data = recent_data)
+```
+
+```{r diagnostics_gamma_glm}
+boot::glm.diag.plots(gamma_glm)
+```
+There are a handful of points with high influence, but most have low 
+leverage.  Two or perhaps three points are problematic.  We can look at the
+points individually.
+
+```{r identify_outliers}
+pts <- boot::glm.diag(gamma_glm)
+pts3 <- which(pts$cook > 0.025 & pts$h / (1 - pts$h) > 0.05)
+recent_data[pts3,] %>%
+  select(c(SiteCode, sdate, Enterococci, Rain48))
+```
+
+These potentially problematic points are all moderately high bacteria levels
+associated with high rainfall events. It is likely that after a certain 
+level of rainfall triggers runoff, much higher rainfall has relatively little
+additional effect on bacteria levels.  This suggests we may have a breakdown in 
+the linear response for higher level rainfall events, which may cause the model 
+to understate the importance of rainfall at lower concentrations. We need to 
+check that.
+
+```{r}
+(emms <- emmeans(gamma_glm, "SiteCode", type = 'response'))
+```
+The negative lower confidence limits are clearly a problem.  The rank order 
+of predicted values and their approximate values all appear more or less 
+appropriate, but we have little confidence in the model, and its strongest 
+result is that sites do not differ in average bacteria levels.
+
+```{r plot_gamma_glm}
+plot(emms) + 
+  xlab('Enteroccocci\n(MPN / 100ml)') +
+  coord_flip()
+```
+
+```{r pwpp_gamma_glm}
+pwpp(emmeans(gamma_glm, "SiteCode"))
+```
+
+### Binomial Model
+```{r binomial_model}
+exceeds_glm <- glm(Exceeds ~ SiteCode + Rain48, family = 'binomial', 
+                   data = recent_data)
+anova(exceeds_glm, test = 'LRT')
+```
+
+Sites do not differ in the probability of violating instantaneous water quality
+standards, but rainfall has a high impact on that probability.
+
+```{r summary_binomial_glm}
+summary(exceeds_glm)
+```
+
+Note the exceptionally high standard error for site Harp-1.  No sample from
+that site has failed water quality criteria, so the estimation is unstable.
+
+We repeat the analysis, omitting that site, to improve model performance.
+
+```{r alt_binomial_glm}
+exceeds_glm_2<- glm(Exceeds ~ SiteCode + Rain48, family = 'binomial',  
+                    data = recent_data,
+                    subset = SiteCode != 'HARP-1')
+anova(exceeds_glm_2, test = 'LRT')
+```
+
+That does not alter our conclusions.
+
+
+# Trend Analysis
+We have trouble conducting trend analysis that includes rainfall information,
+as the way rainfall and weather data were collected changed.
+
+```{r trend_data_review}
+beach_data %>%
+  group_by(Year) %>%
+  summarize(n_Rain24 = sum(! is.na(Rain24)),
+            n_Rain48 = sum(! is.na(Rain48)))
+```
+
+Consistent rain information has been collected since 2008, based on rain in the 
+prior 48 hours.
+```{r filter_trend_data}
+trend_data <- beach_data %>%
+  filter(SiteCode == 'WIL-02' | SiteCode == 'EEB-01') %>%
+  filter(! is.na(Bacteria2)) %>%
+  filter(Year > 2007)
+```
+
+## Log Linear Model
+```{r linear_trendlinear_trend}
+trend_lm <- lm(log(Bacteria) ~ Beach * Year + log1p(Rain48), data = trend_data)
+anova(trend_lm)
+```
+
+So, when accounting for severity of recent rainfall, there is a marginally 
+significant long term trend.
+
+```{r summary_}
+summary(trend_lm)
+```
+
+```{r}
+year_trends <- emtrends(trend_lm, ~ Beach, var = "Year", cov.reduce = median)
+year_trends
+```
+
+```{r plot_lm_trends}
+emmip(trend_lm, Beach ~ Year, variable = 'Year', type = 'response', 
+      cov.reduce = median,
+      at = list(Year = 2008:2019), CIs = TRUE) +
+  theme_cbep()
+```
+
+## Gamma GLM
+```{r trend_glm}
+trend_glm <- glm(log(Bacteria2) ~ Beach * Year + log1p(Rain48), 
+                 family = Gamma(),
+                 data = trend_data)
+anova(trend_glm, test = 'LRT')
+```
+
+Here, we see a statistically significant long term trend, but no differences
+in the trend between the two beaches.  And that "trend is fairly weak, and 
+vanishes as you look more closely.
+
+```{r}
+summary(trend_glm)
+```
+```{r}
+emtrends(trend_glm, ~ Beach, 
+         var = "Year", 
+         at = list(Rain48 = 0))
+```
+Note that both of those marginal trends are not statistically significant on
+their own.
+

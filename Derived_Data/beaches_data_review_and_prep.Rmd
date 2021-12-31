@@ -1,0 +1,531 @@
+---
+title: "Preparation of Data on Bacteria Levels at Casco Bay Beaches"
+author: "Curtis C. Bohlen, Casco Bay Estuary Partnership."
+date: "01/23/2021"
+output:
+  github_document:
+    toc: true
+    fig_width: 5
+    fig_height: 4
+---
+<img
+    src="https://www.cascobayestuary.org/wp-content/uploads/2014/04/logo_sm.jpg"
+    style="position:absolute;top:10px;right:50px;" />
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.align = 'center',
+                      fig.width = 5, fig.height = 4,
+                      collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+# Import Libraries  
+```{r import_libraries}
+library(tidyverse)
+library(readxl)
+
+library(CBEPgraphics)
+load_cbep_fonts()
+theme_set(theme_cbep())
+
+library(LCensMeans)
+
+```
+
+# Data Preparation
+## Initial Folder References
+```{r folders}
+sibfldnm    <- 'Original_Data'
+parent      <- dirname(getwd())
+sibling     <- file.path(parent,sibfldnm)
+
+#dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
+#dir.create(file.path(getwd(), 'models'),  showWarnings = FALSE)
+```
+
+## Load Data
+```{r}
+fn <- "CascoBay_StateOfTheBay_DataRequest 04152020.xlsx"
+
+raw_data <- read_excel(file.path(sibling, fn), 
+                       sheet = "Data",
+                       #range = cell_rows(1:1000),  # used to test col_types
+                       col_types = c("text", "skip", "date", "text", 
+                                   "text", "skip", "text", "numeric",    #h
+                                   "text", "text", "numeric", "text", 
+                                   "skip", "skip", "skip", "skip",       #p
+                                   "skip", "skip", "skip", "skip", 
+                                   "numeric", "skip", "numeric", "skip", #x
+                                   "skip",  "skip",                      #z
+                                   "skip", "skip", 
+                                   "skip", "skip", "skip", "text", 
+                                   "text"),
+                       .name_repair = 'universal') 
+```
+
+```{r}
+names(raw_data)
+```
+
+
+## Drop MDL
+MDL and Reporting Limit are near duplicates.  Where they do not match, it is
+because MDL is missing (`NA`), so we use Reporting Limits
+
+
+```{r}
+raw_data %>%
+  mutate(Reporting.Limit = replace_na(Reporting.Limit, -1),
+         MDL =  replace_na(MDL, -1)) %>%
+  filter(Reporting.Limit != MDL)
+```
+
+
+```{r}
+raw_data <- raw_data %>%
+  select(-MDL)
+```
+   
+## Rename Columns
+```{r}
+raw_data <- raw_data %>%
+  rename(SiteCode = Sample.Point.Name,
+         sdatetime = Sample.Date,
+         Parameter = CAS.Name,
+         Units = Parameter.Unit,
+         Sample.Qual = Sample.Type.Qualifier
+         )
+```
+
+
+## Add Date and Time Values
+```{r}
+raw_data <- raw_data %>%
+  mutate(Year = as.numeric(format(sdatetime, format = '%Y')),
+         Month = as.numeric(format(sdatetime, format = '%m')),
+         DOY = as.numeric(format(sdatetime, format = '%j')),
+         sdate = as.Date(sdatetime))
+```
+
+
+Note:  Sample_Type may not be essential here -- it only has three values, `NA`, 
+"NOT APPLICABLE", and  "REANALYSIS".  Probably only "REANALYSIS" is meaningful. 
+
+# Minimum Values and Left Censored Values
+It is a  bit unclear which observations are left censored.
+
+The enterococci data is sometimes blank, with a "Lab Qualifier" = "U".  These
+appear to be conventional "non-detects".  
+
+There are also a fairly high number of samples, where the reported concentration
+equals the reporting limit.
+
+## Histogram
+```{r}
+raw_data %>%
+  filter(Parameter == 'ENTEROCOCCI') %>%
+ggplot(aes(Concentration)) +
+  geom_histogram() +
+  scale_x_log10()
+```
+
+The MPN method does not provide actual number of colony forming units, but
+"average numbers" based on the method.  MPSN produces "interval censored" data, 
+a fact that we can usually ignore, but here it emphasizes the uncertainty at the 
+low end of observed bacteria concentrations.
+
+It is not unreasonable to think the peak at 10 reflects pooled values near the 
+reporting limit. That reporting limit is either 1 or 10, and
+corresponds to the Dilution Factor.  MPN methods return unevenly spaced
+values starting at 1, 2.... so if those results are multiplied by 10 (to account
+for the dilution) that generates 10,20....  So the large number of values at 10 
+are essentially synonymous with something like "detected, but at less than 20".  
+
+## Observation at Lower Observation Limit
+```{r}
+raw_data %>%
+  mutate(year = as.numeric(format(sdatetime, format = '%Y'))) %>% 
+  filter(Parameter == 'ENTEROCOCCI') %>%
+  filter(Concentration == 10) %>%
+  select(Concentration, year) %>%
+  ggplot(aes(x = year)) + 
+  geom_bar()
+```
+
+So those samples with nominal value of 10  occur throughout the record, and are
+unlikely to be censored values coded differently during a certain period of
+time.  We therefore take the data at face value, and use it as-is.
+
+## Incorporating Non-detects
+Our methods for addressing non-detects in `LCensMeans` requires data in a 
+different format.   It requires data in one column, with a separate logical
+vector indicating which observations were censored. Here, we create a simplified 
+data set to examine.  We will need to repeat this process later. 
+
+```{r}
+cens_data <- raw_data %>%
+  filter(Parameter == 'ENTEROCOCCI') %>%
+  mutate(Bacteria = if_else((! is.na(Lab.Qualifier)) & Lab.Qualifier == 'U',
+                                    Reporting.Limit,
+                                    Concentration),
+         Censored_Flag = Lab.Qualifier == 'U',
+         Censored_Flag = replace_na(Censored_Flag, FALSE))
+```
+
+```{r}
+cens_data %>%
+ggplot(aes(Bacteria, fill = Censored_Flag)) +
+  geom_histogram() +
+  scale_x_log10()
+```
+
+```{r}
+cens_data %>%
+  mutate(year = as.numeric(format(sdatetime, format = '%Y'))) %>% 
+  filter(Bacteria == 10) %>%
+  ggplot(aes(x = year, fill = Censored_Flag)) + 
+  geom_bar() #aes(fill = Censored_Flag))
+```
+It is interesting that value 10 detects and the number of non-detects appear 
+related.
+
+
+```{r}
+rm(cens_data)
+```
+
+## Reviewing Contents
+```{r}
+xtabs(~ Parameter + Sample.Type, data = raw_data)
+
+```
+
+# Pivoting the data
+We need to pivot multiple data columns in parallel, at least until we are sure
+we don't need some of these columns:
+
+## Measured Variables
+We have a problem with temperature data, as the parameter is used both for air
+and water temp.  We modify as follows, before pivoting.
+
+```{r}
+raw_data <- raw_data %>%
+  mutate(Parameter  = if_else(Parameter == 'TEMPERATURE' & Sample.Type == 'AIR',
+                              'AIR TEMPERATURE', Parameter))
+```
+
+```{r}
+wide_data <- raw_data %>%
+  filter(! startsWith(Sample.Type, 'PHYSICAL'))  %>%
+  filter(Parameter != 'RESULT AVAILABLE') %>%
+  select(-Sample.Type) %>%
+  pivot_wider(starts_with('S'), names_from = Parameter,
+              values_from = c(Concentration, Lab.Qualifier, Reporting.Limit)) %>%
+  
+  rename(LQ = Lab.Qualifier_ENTEROCOCCI ) %>%
+  select (-starts_with('LAB.QUALIFIER')) %>%
+  rename(Lab.Qualifier = LQ) %>%
+  
+  rename(RL = Reporting.Limit_ENTEROCOCCI ) %>%
+  select (-starts_with('Reporting.Limit')) %>%
+  rename(Reporting.Limit = RL) %>%
+  
+  select(-contains('DEPTH')) %>%
+  
+  rename_with(~ sub('Concentration_', '', .x )) %>%
+  
+  mutate(Bacteria = if_else((! is.na(Lab.Qualifier)) & Lab.Qualifier == 'U',
+                                    Reporting.Limit,
+                                    ENTEROCOCCI),
+         Censored_Flag = Lab.Qualifier == 'U',
+         Censored_Flag = replace_na(Censored_Flag, FALSE)) %>%
+  
+  rename(Enterococci = ENTEROCOCCI,
+         Salinity = `SALINITY (FROM SODIUM)`,
+         Air_Temp = `AIR TEMPERATURE`,
+         Water_Temp = TEMPERATURE,
+         Rain24  = `ACCUMULATION LAST 24 HOURS`,
+         Rain48 = `ACCUMULATION LAST 48 HOURS`
+         ) 
+```
+
+### Add Date and Time Values
+```{r}
+wide_data <- wide_data %>%
+  mutate(Year = as.numeric(format(sdatetime, format = '%Y')),
+         Month = as.numeric(format(sdatetime, format = '%m')),
+         DOY = as.numeric(format(sdatetime, format = '%j')),
+         sdate = as.Date(sdatetime))
+```
+
+
+## Qualitative Weather and Environmental Data
+We have a problem with qualitative data, as they are coded as a series of flags,
+which need to be interpreted and regrouped into factors.
+
+```{r}
+context_data <- raw_data %>%
+  filter(startsWith(Sample.Type, 'PHYSICAL')) %>%
+  select(-Sample.Type) %>%
+select(-c(Lab.Qualifier:Comment))
+
+```
+
+```{r}
+xtabs(~ Parameter + Units, data = context_data)
+```
+
+We want to group these physical observations (currently coded as "TRUE/FALSE"
+values for each indicator) back into FACTORS. This is laborious, but
+conceptually simple.  However, we are also generating a LOT of NAs that will 
+have to be cleaned up later.
+```{r}
+context_data_2 <- context_data %>%
+  mutate(Weather = if_else(grepl('CURRENT WEATHER', Parameter),
+                           sub('CURRENT WEATHER ', '', Parameter),
+                           NA_character_)) %>%
+  mutate(Weather = factor(Weather, levels = c('CLEAR', 'PARTLY CLOUDY', 
+                                              'OVERCAST', 'RAIN'))) %>%
+  
+  
+  mutate(Past24HR_Weather = if_else(grepl('PAST 24HR', Parameter),
+                                    sub('PAST 24HR WEATHER ', '', Parameter),
+                                    NA_character_)) %>%
+  mutate(Past24HR_Weather = factor(Past24HR_Weather, 
+                                   levels = c('HEAVY RAIN', 
+                                              'MEDIUM RAIN',
+                                              'LIGHT RAIN'))) %>%
+  
+  
+  mutate(Past48HR_Weather = if_else(grepl('PAST 48HR', Parameter),
+                                    sub('PAST 48HR WEATHER ', '', Parameter),
+                                    NA_character_)) %>%
+  mutate(Past24HR_Weather = factor(Past24HR_Weather,
+                                   levels = c('HEAVY RAIN', 
+                                              'MEDIUM RAIN',
+                                              'LIGHT RAIN', 
+                                              'NO RAIN'))) %>%
+  
+  
+  mutate(Tide_Stage = if_else(grepl('TIDE STAGE', Parameter),
+                              sub('TIDE STAGE: ', '', Parameter),
+                              NA_character_)) %>%
+  mutate(Tide_Stage = factor(Tide_Stage, 
+                             levels = c('HIGH',
+                                        'HIGH EBB',
+                                        'EBB',
+                                        'LOW EBB',
+                                        'LOW',
+                                        'LOW FLOOD', 
+                                        'FLOOD',
+                                        'HIGH FLOOD'))) %>%
+  
+  
+  mutate(Water_Surface = if_else(grepl('WATER SURFACE', Parameter) &
+                                   ! grepl('CURRENT', Parameter),
+                                 sub('WATER SURFACE ', '', Parameter),
+                                 NA_character_)) %>%
+  mutate(Tide_Stage = factor(Tide_Stage, levels = c('CALM',
+                                                    'ROUGH'))) %>%
+  
+  
+  mutate(Current = if_else(grepl('CURRENT', Parameter),
+                           sub('WATER SURFACE ', '', Parameter),
+                           NA_character_)) %>%
+  mutate(Current = factor(Tide_Stage,
+                          levels = c('SLOW CURRENT',
+                                     'MEDIUM CURRENT',
+                                     'RAPID CURRENT'), 
+                          labels = c('SLOW',
+                                     'MEDIUM',
+                                     'RAPID')))
+
+```
+
+
+Now we need to clean up all those NAs, and aggregate into nice rows.
+We handle the columns one by one, and join back together by Sample ID.
+
+*  Weather  
+*  Past24HR_Weather  
+*  Past48HR_Weather  
+*  Tide_Stage  
+*  Water_Surface  
+*  Current  
+
+```{r}
+wthr <- context_data_2 %>%
+  filter (! is.na(Weather)) %>%
+  select(SiteCode:Sample.Id, Weather)
+
+past24 <- context_data_2 %>%
+  filter (! is.na(Past24HR_Weather)) %>%
+  select(SiteCode:Sample.Id, Past24HR_Weather)
+
+past48 <- context_data_2 %>%
+  filter (! is.na(Past48HR_Weather)) %>%
+  select(SiteCode:Sample.Id, Past48HR_Weather)
+
+tide <- context_data_2 %>%
+  filter (! is.na(Tide_Stage)) %>%
+  select(SiteCode:Sample.Id, Tide_Stage)
+
+surface <- context_data_2 %>%
+  filter (! is.na(Water_Surface)) %>%
+  select(SiteCode:Sample.Id, Water_Surface)
+
+current <- context_data_2 %>%
+  filter (! is.na(Current)) %>%
+  select(SiteCode:Sample.Id, Current)
+
+context_data_final <- full_join(wthr, past24,
+                                by=c('SiteCode', 'sdatetime', 'Sample.Id')) %>%
+  full_join(past48, by=c('SiteCode', 'sdatetime', 'Sample.Id')) %>%
+  full_join(tide, by=c('SiteCode', 'sdatetime', 'Sample.Id')) %>%
+  full_join(surface, by=c('SiteCode', 'sdatetime', 'Sample.Id')) %>%
+  full_join(current, by=c('SiteCode', 'sdatetime', 'Sample.Id'))
+
+rm(wthr, past24, past48, tide, surface, current)       
+```
+
+
+```{r}
+rm(context_data, context_data_2)
+```
+
+### Add Date and Time Values
+```{r}
+context_data_final <- context_data_final %>%
+  mutate(Year = as.numeric(format(sdatetime, format = '%Y')),
+         Month = as.numeric(format(sdatetime, format = '%m')),
+         DOY = as.numeric(format(sdatetime, format = '%j')),
+         sdate = as.Date(sdatetime))
+```
+
+### Check for Duplicate Rows
+Did that generate any duplicate rows (we should not have any)?
+```{r}
+dups <- context_data_final %>%
+  group_by(Sample.Id) %>%
+  summarize(n = n()) %>%
+  filter(n > 1) %>%
+  pull(Sample.Id)
+dups 
+```
+```{r}
+context_data_final %>%
+  filter(Sample.Id %in% dups)
+
+```
+Each of these appears to be duplication of weather data, where the same data is
+repeated once with a time stamp with an actual time, and a second time with a 
+time stamp for 0.00 hours.  We can delete the rows with uninformative time
+stamps, although there is a question of why those responses are present at all.
+
+```{r}
+context_data_final <- context_data_final %>%
+  mutate(h = as.numeric(format(sdatetime, format = '%H')),
+         m = as.numeric(format(sdatetime, format = '%M'))) %>%
+filter(! (Sample.Id %in% dups & h == 0 & m == 0)) %>%
+  select(-h, -m)
+```
+
+Note that we have different numbers of rows in wide_data and context_data_final.
+
+Lets look at differences.
+```{r}
+context_ids <- context_data_final %>%
+  pull(Sample.Id) %>%
+  unique
+
+wide_ids <- wide_data %>%
+  pull(Sample.Id) %>%
+  unique
+
+(context_not_wide <- context_ids[! context_ids %in% wide_ids])
+cat('\n\n')
+(wide_not_context <- wide_ids[! wide_ids %in% context_ids])
+
+```
+
+It appears that data on weather was not consistently collected in the 
+early years (2000, 2001, 2002). There are few samples without weather data after 
+that.  This will convert to missing values in any final data, so that's O.K. It
+may result in  unbalanced designs in models that look at the longer history 
+(earlier years).
+
+It's not clear why would we have context data from Sample IDs without measured 
+data, but that's the situation.  We will not analyze qualitative data alone, so
+these samples effectively vanish when we conduct data analysis.
+
+## Final Data Join
+```{r}
+wide_data <- wide_data %>%
+  left_join(context_data_final) %>%
+  relocate(c(SiteCode, sdatetime, sdate, Year,
+             Month, DOY, Sample.Id, Sample.Qual,
+             Enterococci, Reporting.Limit, Lab.Qualifier,
+             Bacteria, Censored_Flag,
+             Rain24, Rain48))
+```
+
+# Data Review
+## Check 24 hour and 48 Hour Rainfall Totals
+We also have challenges with inconsistent reporting over time of 24 hour and 48
+hour precipitation.  We plot up the number of samples for which we have either
+metric.
+
+```{r}
+wide_data %>%
+  select(sdatetime, Rain24, Rain48) %>%
+  mutate(Year = as.numeric(format(sdatetime, format = '%Y'))) %>%
+  select(-sdatetime) %>%
+  pivot_longer(-Year, names_to = 'period', values_to = 'values') %>%
+  filter (! is.na(values)) %>%
+  
+  ggplot(aes(x = Year, fill = period)) +
+  geom_bar()
+
+```
+
+So prior to 2008, rainfall totals were reported as the totals for the prior 24 
+hours. Since 2008, rainfall a has been reported for the prior 24 hours.
+
+
+## Check Related
+Do we have something similar for the weather data?
+```{r}
+levels(factor(context_data_final$Past24HR_Weather))
+levels(factor(context_data_final$Past48HR_Weather))
+xtabs(~Past48HR_Weather + Past24HR_Weather, addNA = TRUE, data = context_data_final)
+```
+
+
+```{r}
+xtabs(~Past48HR_Weather + Year, addNA = TRUE, data = context_data_final)
+```
+
+So the answer is "yes."  The use of the two systems changes in 2008.  Prior to
+2008 the data was collected looking at weather in the prior 24 hours.  From 2008
+to the present, data was collected looking at weather over the prior 48 hours.
+
+## What's in the Data?
+```{r}
+names(wide_data)
+```
+
+# Export Data
+Data names are slightly inconsistent at this point.  We clean them up before 
+export, especially replacing periods with underscores.
+```{r}
+wide_data <- wide_data %>%
+  rename(Sample_ID = Sample.Id,
+         Sample_Qualifier = Sample.Qual,
+         Reporting_Limit = Reporting.Limit,
+         Lab_Qualifier = Lab.Qualifier)
+```
+
+```{r}
+write_csv(wide_data, 'beaches_data.csv')
+```
+

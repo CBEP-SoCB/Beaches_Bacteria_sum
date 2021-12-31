@@ -1,0 +1,839 @@
+---
+title: "Analysis of Bacteria Levels at Casco Bay Beaches"
+author: "Curtis C. Bohlen, Casco Bay Estuary Partnership."
+date: "01/23/2021"
+output:
+  github_document:
+    toc: true
+    fig_width: 5
+    fig_height: 4
+---
+<img
+    src="https://www.cascobayestuary.org/wp-content/uploads/2014/04/logo_sm.jpg"
+    style="position:absolute;top:10px;right:50px;" />
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.align = 'center',
+                      fig.width = 5, fig.height = 4,
+                      collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+To be added....
+
+## Standards 
+### Beaces Program
+104 CFU / 100 ml, for individual observations.
+
+### Maine State Class SB Waters Standards
+> The number of enterococcus bacteria in these waters may not exceed a geometric
+  mean of 8 CFU per 100   milliliters in any 90-day interval or 54 CFU per 100
+  milliliters in more than 10% of the samples in any 90-day interval.
+  
+  38 M.R.S. §465-B(2)(B)
+
+# Import Libraries  
+```{r import_libraries}
+library(fitdistrplus)  # Loads MASS, which has `select()`, so load first
+library(tidyverse)     # Loads another `select()`
+
+library(emmeans)   # For marginal means
+
+library(mblm)      # for the Thiel-Sen estimators -- not really successful here
+
+library(VGAM)
+
+library(CBEPgraphics)
+load_cbep_fonts()
+theme_set(theme_cbep())
+
+library(LCensMeans)
+```
+
+# Data Preparation
+## Initial Folder References
+```{r folders}
+sibfldnm    <- 'Derived_Data'
+parent      <- dirname(getwd())
+sibling     <- file.path(parent,sibfldnm)
+
+#dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
+#dir.create(file.path(getwd(), 'models'),  showWarnings = FALSE)
+```
+
+## Load Data
+```{r load_data}
+fn <- "beaches_data.csv"
+beach_data <- read_csv(file.path(sibling, fn))
+```
+
+```{r}
+names(beach_data)
+```
+
+##  Add a "Beach" Identifier
+```{r add_beach}
+fn = "beach_locations.csv"
+beach_lookup = read_csv(file.path(sibling, fn),
+                        col_types = cols(
+                          Town = col_character(),
+                          Beach_Name = col_character(),
+                          SamplePoint = col_character(),
+                          Latitude = col_double(),
+                          Longitude = col_double()
+                        )) %>%
+  select(-Latitude, -Longitude)
+
+beach_data <- beach_data %>%
+  mutate(Beach = beach_lookup$Beach_Name[match(SiteCode, 
+                                               beach_lookup$SamplePoint)])
+```
+
+
+## Add a "Day of the Week" Identifier
+We need this to help evaluate whether samples are "normal" samples or "storm"
+samples.
+```{r add_day}
+beach_data <- beach_data %>%
+  mutate(Weekday = weekdays(sdate)) %>%
+  relocate(Weekday, .after = Month)
+```
+
+
+## Normal and Conditional Samples
+The Beaches program principally collects samples from each beach on specific
+days of the week.  Samples collected on other days may be "non-standard" 
+samples. For example, protocol after a beach closure is to test a few days
+later to see if levels of bacteria have returned to safe levels.  We should not 
+expect such conditional samples to have the same distribution of bacteria levels
+as normal samples.
+
+Unfortunately, records are not entirely reliable on this matter, so the best
+we can do is figure out if samples were collected on a "normal" day of the week.
+
+We look at Crosstabs by year to figure out the pattern.
+```{r table_by_day}
+dow <- xtabs(~Year + Weekday + Beach , data = beach_data)
+dow
+```
+
+### Results
+
+Beach                      | Years          | Principal Days of the Week       
+---------------------------|----------------|--------------------------  
+ Broad Cove Reserve        | 2016 - Present | Wednesday              
+ East End Beach (to 2015)  | 2000 - 2015    | Monday, Wednesday, Friday  
+ East End Beach (Recent)   | 2016 - Present | Tuesday, Thursday  
+ Mackerel Cove             | 2018           | Monday, Wednesday (?)  
+ Mackerel Cove             | 2019           | Monday  
+ Mitchell Field Beach      | 2018           | Monday, Wednesday (?)  
+ Mitchell Field Beach      | 2019           | Monday  
+ Stover's Point Preserve    | 2018           | Monday, Wednesday (?)  
+ Stover's Point Preserve    | 2019           | Monday  
+ Willard Beach             | 2003 - 2010    | Monday, Wednesday (?)  
+ Willard Beach             | 2013 - Present | Monday, Wednesday  
+ Winslow Park              | 2008 - 2009    | Monday  
+ Winslow Park              | 2010 - 2011    | Monday, Thursday  
+ Winslow Park              | 2012 - 2013    | Monday, Wednesday (?)  
+ Winslow Park              | 2014 - 2015    | Monday  
+
+### Add The Indicator
+We create a `FALSE` variable, and then go through site by site, flipping the 
+value to `TRUE` when appropriate.  This code may not be appropriate for
+future data sets, as it is tailored to the exceptions in the current record.
+```{r conditional_samples}
+beach_data <- beach_data %>%
+  mutate(normal_flag = FALSE,
+         normal_flag = if_else(Beach == 'Broad Cove Reserve' & 
+                                Weekday == 'Wednesday',
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'East End Beach' & 
+                                Year < 2016 &
+                                Weekday %in% c('Monday', 'Wednesday', 'Friday'),
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'East End Beach' & 
+                                Year >= 2016 &
+                                Weekday %in% c('Tuesday', 'Thursday'),
+                                TRUE, normal_flag),
+          # The only "extras" at Mackerel Cove are on Thursday
+         normal_flag = if_else(Beach == 'Mackerel Cove' & 
+                                Weekday !=  'Thursday',   
+                                TRUE, normal_flag),
+          # At Mitchell Field, we just pick out the two "extras"
+         normal_flag = if_else(Beach == 'Mitchell Field Beach' & 
+                               (Year == 2018 & Weekday !=  'Thursday') |  
+                                 (Year == 2019 & Weekday != 'Wednesday'),
+                                TRUE, normal_flag),
+        # The only "extras" at Stover's Point are on Thursday
+         normal_flag = if_else(Beach == 'Stovers Point Preserve' & 
+                                Weekday !=  'Thursday',   
+                                TRUE, normal_flag),
+         normal_flag = if_else(Beach == 'Willard Beach' & 
+                               Weekday %in% c('Monday', 'Wednesday'),
+                                TRUE, normal_flag),
+        # At Winslow, it's not clear if any of the samples were exceptional
+        # samples, so we treat them all as regular samples.
+         normal_flag = if_else(Beach == 'Winslow Park', 
+                                TRUE, normal_flag)) %>%
+    relocate(normal_flag, .after = Weekday)
+```
+
+## Add Maximum Likelihood Estimate for Non-detects
+This uses our LCensMeans package, and estimates a maximum likelihood estimate
+of the expected value of the (unobserved) left censored values.  It relies
+on several assumption that are questionable for these data, but it is arguably
+better than using the detection limit or half the detection limit.
+```{r handle_non-detects}
+beach_data <- beach_data %>%
+mutate(Bacteria2 = sub_cmeans(Bacteria, Censored_Flag) )
+```
+
+
+## Calculate Exceedences
+```{r calculate_exceedences}
+beach_data <- beach_data %>%
+  mutate(Exceeds = Bacteria > 104) %>%
+  relocate(Exceeds, .after = Censored_Flag)
+```
+
+
+# Preliminary Graphics
+## Histograms
+```{r histograms, fig.width = 7}
+ggplot(beach_data, aes(Bacteria, fill =Censored_Flag)) +
+  geom_histogram() +
+  scale_fill_manual(values = cbep_colors()) +
+  geom_vline(xintercept = 104, lty = 3) +
+  scale_x_log10() +
+  facet_wrap(~Beach, scale = 'free_y') +
+
+  theme_cbep(base_size = 10)
+```
+The East End Beach observations at a different dilution are curious, as they
+do not turn up anywhere else.
+
+
+## Pareto distribution?
+A Pareto distribution should turn up as more or less a straight line on
+a log-log plot of the histogram.  The following suggests we have something
+akin to a Pareto distribution, although perhaps zero-inflated.
+
+```{r is_it_pareto}
+ggplot(beach_data, aes(Bacteria2, fill =Censored_Flag)) +
+  geom_histogram() +
+  scale_fill_manual(values = cbep_colors()) +
+  geom_vline(xintercept = 104, lty = 3) +
+  scale_x_log10() +
+  scale_y_log10() +
+
+  theme_cbep(base_size = 10)
+
+```
+So, other than the superabundance of observations at the lower detection limits,
+and perhaps a concentration of values at the maximum observed value (right
+censored?), this shows every sign of being close to a Pareto distribution.
+But when we try to overplot a Pareto distribution, the scales do not appear
+to match (by a factor of about 5), although shape appears reasonable.
+
+We are fitting a Pareto distribution with minimum value `location = 0`, and 
+using  data that has been corrected for left censoring.  Results are similar
+for other data sets, but the selection of minimum value has a large effect on 
+fit.
+
+```{r pareto_fit}
+paretofit = vglm(Bacteria2~ 1, paretoII(location = 0) , data = beach_data)
+parms <- exp(coef(paretofit))
+names(parms) <- c('Scale', 'Shape')
+parms
+#predict(paretofit, newdata = data.frame(x = 1))
+```
+
+```{r plot_pareto_fit}
+ggplot(beach_data, aes(Bacteria2, fill = Censored_Flag)) +
+  geom_freqpoly() +
+  geom_vline(xintercept = 104, lty = 3) +
+  scale_x_log10() +
+  scale_y_log10() +
+
+  theme_cbep(base_size = 10) +
+  
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = parms[[1]],
+                             shape = parms[[2]]),
+                 color = 'red')
+```
+
+
+## Temporal Plots
+```{r time_plots, fig.width = 7}
+ggplot(beach_data, aes(Year, Bacteria, color = normal_flag)) +
+  geom_jitter(alpha = 0.5) +
+  #geom_smooth() +
+  scale_fill_manual(values = cbep_colors()) +
+  geom_hline(yintercept = 104, lty = 3) +
+  facet_wrap(~SiteCode, scale = 'free_y') +
+  scale_y_log10() +
+
+  theme_cbep(base_size = 10)
+```
+
+Note the early data from EEB-01 with a lower reported Reporting Limit.
+
+## Annual Frequency of Exceedences
+```{r annual_exceedences, fig.width = 7}
+ggplot(beach_data, aes(Year, as.numeric(Exceeds), group = Year)) +
+  stat_summary(geom = 'col', fun = mean, color = 'gray50') +
+  facet_wrap(~SiteCode, scale = 'fixed') +
+  theme_cbep(base_size = 10) + 
+  ylab('Proportion Exceeding Standard')
+```
+
+It is not obvious that the observations collected outside of the normal schedule
+are any different.  Quick graphical analysis and modeling suggests it is not,
+but because of the highly skewed nature of the data, that conclusion may not be
+entirely reliable. The available models are not likely very sensitive to the
+small differences we would expect.
+
+Without strong evidence that we need to retain the  sample types in our models, 
+we will omit them.
+
+# Recent Status
+```{r recent_data}
+recent_data <- beach_data %>%
+  filter(Year > 2015)
+
+recent_data %>%
+  group_by(Beach) %>%
+  summarize( years = length(unique(Year)),
+             median_Bacteria = median(Bacteria2, na.rm = TRUE),
+             gmean_bacteria = exp(mean(log(Bacteria2),nas.rm = TRUE)),
+             mean_Bacteria = mean(Bacteria2, na.rm = TRUE),
+             p90_Bacteria = quantile(Bacteria2, .9),
+             n = sum(! is.na(Bacteria2)),
+             n_exceeds = sum(Exceeds, na.rm = TRUE),
+             p_exceeds = n_exceeds / n)
+
+```
+
+
+Note that the median Bacteria for pretty much all of these stations is at or
+below the lower detection limit. (That is possible because we have replaced
+non-detects by an estimate of the conditional mean expected for unobserved
+censored values).  That means the data is at or below the detection 
+limits more than 50% of the time.
+
+
+```{r summaries}
+cat('Omitting non-detects\n')
+summary(recent_data$Enterococci)
+cat('\nNon-detects at Detection Limit\n')
+summary(recent_data$Bacteria)
+cat('\nNon-detects at maximum likelihood estimator\n')
+summary(recent_data$Bacteria2)
+cat('\nGeometric Mean\n')
+exp(mean(log(recent_data$Bacteria2)))
+cat('\n\nProbability of Violating Standards\n')
+sum(recent_data$Exceeds) / sum(! is.na(recent_data$Exceeds))
+```
+
+## Analysis of Bacteria MPN Data
+### Distributions
+```{r plot_cdf}
+df <- data.frame(left  = if_else(beach_data$Censored_Flag, NA_real_, 
+                             beach_data$Bacteria),
+             right = beach_data$Bacteria)
+
+plotdistcens(df)
+```
+
+```{r cullen_frey}
+tmp <- beach_data%>%
+  filter(! is.na(Bacteria)) %>%
+  pull(Bacteria) %>%
+descdist()
+```
+
+So, the distribution of bacteria levels is more skewed than a gamma distribution.
+
+It falls within the range of skewness and kurtosis of a beta distribution, but 
+the beta distribution is bounded by zero and one.  So, the only reasonable 
+choice (?) for a GLM is likely the inverse Gaussian family. 
+
+```{r cullen_frey_2}
+tmp <- beach_data%>%
+  filter(! is.na(Bacteria)) %>%
+  pull(Bacteria) %>%
+  log() %>%
+descdist()
+```
+So log transformed data are not that far removed from a lognormal distribution.
+We may be able to model this with a gamma or inverse Gaussian GLM.
+
+### Simple Log Linear Model
+Although we think a simple linear model is inappropriate given the highly skewed 
+data, we look at it anyway as a starting point for analysis.
+```{r plot_simple_lm}
+test_lm <- lm(log(Bacteria) ~ Beach, data = recent_data)
+plot(test_lm)
+```
+The model fails to address extreme values.
+
+```{r}
+(emms <- emmeans(test_lm, "Beach", type = 'response'))
+```
+```{r plot_lm_emms}
+plot(emms) + 
+  xlab('Enteroccocci\n(MPN / 100 ml)') +
+  coord_flip() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.25))
+```
+
+```{r pwpp_lm}
+pwpp(emms)
+```
+
+So only to pairwise comparisons are meaningful -- both contrasting our 
+cleanest beach -- Harpswell's Stover's Point Beach -- with our two with the 
+highest bacteria levels -- Willard Beach and Harpswell's Mackerel Cove Beach.
+
+We should be aware, however, that this model was not especially a good one, so
+we should take any such comparisons with a grain of salt.
+
+#### Log Linear Model Checking "Extra" Samples
+Although we think a simple linear model is probably inappropriate given the
+highly skewed data, we look at it anyway as a starting point.
+```{r check_conditional}
+test_lm_2 <- lm(log(Bacteria) ~ Beach * normal_flag, data = recent_data)
+anova(test_lm_2)
+```
+That suggests the "special" sampling days are not significantly different from 
+the normal sampling days, somewhat contrary to expectations.
+
+### GLM Analysis
+We explored Gamma GLMs and inverse Gaussian GLMs using several link functions, 
+(1/mu^2, inverse, identity).  Results are qualitatively similar.  The inverse
+Gaussian models perform relatively poorly (based on model diagnostic plots), so 
+we only show results of the Gamma GLM.
+
+#### Gamma GLM
+```{r gamma_glm}
+gamma_glm <- glm(log(Bacteria) ~ Beach, 
+                family = Gamma(), 
+                data = recent_data)
+```
+
+```{r diagnostics_gamma_glm}
+boot::glm.diag.plots(gamma_glm)
+```
+
+```{r}
+(emms <- emmeans(gamma_glm, "Beach", type = 'response'))
+```
+The negative lower confidence limits are clearly a problem.  The rank order 
+of predicted values and their approximate values all appear more or less 
+appropriate, but we have little confidence in the model, and its strongest 
+result is that sites do not differ in average bacteria levels.
+
+```{r plot_gamma_glm_emms}
+plot(emms) + 
+  xlab('Enteroccocci\n(MPN / 100 ml)') +
+  coord_flip()
+```
+
+```{r pwpp_gamma_glm}
+pwpp(emmeans(gamma_glm, "Beach"))
+```
+
+#### Pareto GLM
+The Gamma GLM does not address these highly skewed data adequately.
+Further models would need to focus on zero inflated models or Pareto 
+distributed errors, or both.  Our efforts to use Pareto models in VGAM
+have been frustrated by the package's relative complexity.
+
+We ran into estimation problems when we included the Stover's Point Preserve
+site in the model, apparently because the data is almost all non-detects.
+
+```{r pareto_glm}
+pareto_vglm <- vglm(Bacteria2 ~ Beach, 
+                    paretoII, data = recent_data, 
+                    subset = Beach != 'Stovers Point Preserve',
+                    maxit = 50)
+anova.vglm(pareto_vglm)  # ANOVA returns an error
+```
+So that shows we do have differences among sites.  It's hard to isolate those 
+differences, however.
+
+```{r}
+summary(pareto_vglm)
+```
+
+None of the individual parameter are significant, so comparison to the base
+case (Willard Beach) is not where the differences lie.  Unfortunately, 
+`emmeans()` does not support `vglm` models.  We use predict instead. Since we 
+are not certain of how to evaluate significance of pairwise comparisons of
+the Pareto parameters, we provide only qualitative interpretation.
+
+```{r pareto_results}
+sites<- tibble(Beach = unique(recent_data$Beach)) %>%
+  filter(Beach != 'Stovers Point Preserve')
+p <- predict(pareto_vglm, newdata = sites, se = TRUE)
+
+ptab = cbind(p$fitted.values, p$se.fit)
+rownames(ptab) <-  sites$Beach
+colnames(ptab) = c('log_Scale', 'log_Shape', 'log_Scale_SD', 'log_Shape_SD')
+ptab
+```
+The call to `predict()` returns estimates of model parameters, which
+here include not a mean or standard deviation, but (log transformed) estimates
+of the parameters of an implied Pareto distribution for each beach.
+
+Parameters are generally similar for all sites, except:  
+1.  Willard Beach has a low (negative log) shape value.  That implies a very
+    heavy "tail" at that site.   
+2.  Mackerel Cove has a high scale parameter and the highest shape parameter
+    (by a small, statistically uncertain amount).  That implies a relatively
+    high level of bacteria, but lower frequency of very high observations than 
+    that might suggest. 
+
+The negative loglink(shape) parameter for Willard Beach suggests
+a shape parameter less than 1, which implies a Pareto distribution with such
+heavy tails as to have no defined variance.  That appears likely to be a
+meaningful difference from most other beaches, based on eyeing the 
+standard errors.
+
+##### Moments of the Pareto Distribution
+We can estimate moments from the parameters. Wikipedia reports the moments of 
+(this variant of) the Pareto Distribution as:
+
+$$ E(x) = \frac{\sigma}{\alpha - 1} + \mu  \quad \alpha > 1$$
+
+Where:  
+*  $\sigma$ is the SCALE parameter  
+*  $\alpha$ is the SHAPE parameter  
+*  $\mu$ is the Location parameter (minimum possible value, here zero)  
+      
+So the mean goes UP with SCALE and DOWN with SHAPE.
+
+Variance (for $\mu = 0$) is:
+$$ Var(x) = \frac{\sigma^2 \alpha}{(\alpha-1)^2(\alpha-2)}  \quad \alpha > 2$$
+For $\alpha < 2$, it is infinite.  For $\alpha < 1$ it is undefined. 
+
+So, variance also tends to go UP with SCALE and DOWN with SHAPE.
+
+
+##### Pareto Interpretation
+We can conclude:  
+*  Willard Beach has moderate levels over all, but a high probability of very
+   high observations.
+*  Mackerel Cove has relatively high overall levels, but chances of extreme
+   value as at that site are lower than expected based on that average.
+
+##### Notes on Interpreting Parameters
+We can get a feel for the implications of shape and scale parameters by plotting
+Pareto densities.
+
+```{r pareto_scale_demo, fig.width = 5, fig.height = 4}
+ggplot() +
+  scale_x_log10(limits = c(1,1000)) +
+  #scale_y_log10() +
+
+  theme_cbep(base_size = 10) +
+  
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 1,
+                             shape = 1),
+                 color = 'red') +
+  
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 2,
+                             shape = 1),
+                 color = 'orange') +
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 5,
+                             shape = 1),
+                 color = 'yellow') +
+      geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 10,
+                             shape = 1),
+                 color = 'black')
+```
+So, as SCALE goes up, low values drop, mid and higher values rise.
+
+
+```{r pareto_shape_demo, fig.width = 5, fig.height = 4}
+ggplot() +
+  scale_x_log10(limits = c(1,1000)) +
+  #scale_y_log10() +
+
+  theme_cbep(base_size = 10) +
+  
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 5,
+                             shape = .1),
+                 color = 'red') +
+  
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 5,
+                             shape = 1),
+                 color = 'orange') +
+  geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 5,
+                             shape = 2),
+                 color = 'yellow') +
+      geom_function(fun = dparetoII,
+                 args = list(location = 0,
+                             scale = 5,
+                             shape = 5),
+                 color = 'black')
+```
+The SHAPE parameter has to do with how closely the distribution hugs towards
+the "origin" -- more correctly the location parameter, which is the minimum. 
+
+Low shape spreads things out a bit more. High shape pulls things in closely.
+
+A classic Pareto (I) distribution has `location = 1`.  here we use `location =
+0`, as that makes both better scientific sense and allows our values adjusted
+for censoring  ( at `Reporting_Limit == 1`) to be incorporated in the models.
+
+
+### Non-parametric Tests
+We proceed to a nonparametric analysis. This is useful for a one way analysis, 
+but does not lend itself to testing more complex models.
+```{r kruskal_test}
+kruskal.test(Bacteria2 ~ Beach, data = recent_data)
+```
+Although the Kruskal-Wallis test is not strictly a comparison of medians, it's 
+close, so we can look at medians. 
+```{r summary_again}
+recent_data %>%
+  group_by(Beach) %>%
+  summarize(Median = median(Bacteria2),
+            iqr = IQR(Bacteria2),
+            p90 = quantile(Bacteria2, .9))
+```
+
+These data include our (simulated, thus random) estimates of expected values of
+censored values.  Thus any values under 10 imply that the median observation is
+really just a non-detect.  Minor differences in those medians are due to
+random variation in simulations.  For  those sites, a comparison of the 
+interquartile ranges and p90 scores are most appropriate.
+
+```{r wilcox}
+pairwise.wilcox.test(recent_data$Bacteria2, recent_data$Beach,
+                 p.adjust.method = "holm")
+```
+
+### Conclusions
+Linear models and Generalized Linear Models were not very useful.  Each failed
+to address extreme values with any authority. The Pareto model provided insight
+into occurrence of extreme values (although without clear support for 
+hypothesis tests), and the nonparametric methods provide a more robust analysis.
+
+Luckily, conclusions of all analyses are generally in agreement with regard to qualitative findings.
+
+Harpswell's Stover's Point Preserve has the lowest bacteria levels of any of
+Casco Bay's regularly monitored beaches.  Based on the nonparametric analysis,
+its bacteria level is lower than that of all sites except Mitchell Field
+Beach. (p values less than 0.1; if you use a p < 0.05 standard, the
+difference with Broad Cove becomes questionable.)
+
+Two other sites with similar median values -- Broad Cover Reserve and
+Mitchell Field Beach -- showed slightly higher probability of elevated 
+bacteria levels, but given the limited data, such differences are not robust.
+
+Our two most urban beaches, East End Beach and Willard Beach East End Beach, while showing slightly higher median values, also have many observations where bacteria
+were not detected, so observed differences with other beaches are not robust.
+
+The highest bacteria levels were observed at Mackerel Cove, but differences
+are only statistically robust when compared to the cleanest Casco Bay beaches.  
+
+The Pareto analysis suggests an important distinction between the two beaches
+the highest levels of bacteria -- Mackerel Cove and Willard Beach.  While 
+elevated levels are more abundant at Mackerel Cove, when things are bad at 
+Willard Beach, they have sometimes been exceptionally high.
+
+
+## Analyzing Exceedences of Standards
+An alternative modeling approach emphasizes the frequency of violations of water
+quality standards. Given the highly skewed nature of data on bacteria counts, this
+transforms a difficult quantitative analysis into a simpler binomial analysis.
+
+We can instead model probability that a site exceeds applicable water quality 
+standards.
+
+### Binomial Model
+```{r binomial_model}
+exceeds_glm <- glm(Exceeds ~ Beach, family = 'binomial', 
+                   data = recent_data)
+anova(exceeds_glm, test = 'LRT')
+```
+
+Sites do not differ in the probability of violating instantaneous water quality
+standards.
+
+```{r}
+summary(exceeds_glm)
+
+```
+
+Note the exceptionally high standard error for Stover's Point.  No sample from
+that site has failed water quality criteria, so the estimation is unstable.
+
+We repeat the analysis, omitting that site, to improve model performance and
+check if results are changed in any way.
+```{r binomial_alt_model}
+exceeds_glm_2<- glm(Exceeds ~ Beach, family = 'binomial',  
+                    data = recent_data,
+                    subset = Beach != 'HARP-1')
+anova(exceeds_glm_2, test = 'LRT')
+```
+
+That does not alter our conclusions.
+
+# Trend Analysis
+We only have long term data from two beaches -- East end and Willard.
+```{r trend_data}
+trend_data <- beach_data %>%
+  filter(grepl('WIL', SiteCode) | SiteCode == 'EEB-01') %>%
+  filter(! is.na(Bacteria2))
+```
+
+## Initial Graphic
+```{r first_trend_graphic, fig.width = 5, fig.height = 8}
+ggplot(trend_data, aes(x = Year, y = Bacteria2, color = Beach)) +
+  geom_jitter(alpha = 1, height = 0.025, width = 0.2) +
+  scale_y_log10() +
+  
+  xlab('') +
+  ylab('Enterococci (MPN)') +
+  
+  theme_cbep(base_size = 12) +
+  scale_color_manual(values = cbep_colors()) +
+  theme(legend.position = 'bottom') +
+  facet_wrap(~Beach, nrow = 2)
+```
+
+We have several problems with trend analysis here.  The first stems from the 
+early data from East End Beach, which has a lower detection limit than later
+data.  Since a high proportion of observations are non-detects, our estimate 
+of trends may be dominated by detection limits. We could take three approaches:
+
+1.  Collapse all low values (below 10) to a pseudo non-detect category;  
+2.  Construct a model that explicitly addresses the probability of a
+    non-detect over time;  
+3.  Just drop the earliest data.  
+
+Number 3 is most straight forward.  The lower detection limits were used prior 
+to 2005.
+
+The second is that we have no recent data from two of the three Willard Beach
+monitoring locations.  It MAY be appropriate to collapse that data, but we 
+can not be sure without conducting principled analysis.  Also, since 
+observations were collected at all three locations at Willard Beach on the same 
+days, they are correlated, and we have to model them as such.  Given the 
+difficulty we have had identifying models that handle the highly skewed 
+bacteria data adequately, We are not confident that complex models will
+address those correlations adequately.
+
+## Restricted Data
+We restrict attention only to WIL-02 at Willard Beach.
+```{r filter_trend_data}
+trend_data <- beach_data %>%
+  filter(SiteCode == 'WIL-02' | SiteCode == 'EEB-01') %>%
+  filter(! is.na(Bacteria2)) %>%
+  filter(SiteCode == 'EEB-01' | Year > 2004) %>%    # Remove Willard early data
+  filter(Reporting_Limit > 5 | is.na(Reporting_Limit)) # Remove data with low RL
+```
+
+
+
+## Thiel-Sen Slopes (unsuccessful)
+```{r thiel-sen}
+ts_models <- trend_data %>%
+  filter(! is.na(Beach), ! is.na(Bacteria2)) %>%
+  mutate(log_B = log(Bacteria2)) %>%
+  group_by(Beach) %>%
+  nest() %>%
+  mutate(first.mblm = map(data, function(df) mblm(Bacteria2 ~ Year, df))) %>%
+  mutate(second.mblm = map(data, function(df) mblm(log_B ~ Year, df)))
+```
+
+```{r}
+map(ts_models$first.mblm, summary)
+```
+
+A regression at Willard Beach is marginally significant, but the their-sen slope
+is zero.
+
+```{r}
+map(ts_models$second.mblm, summary)
+```
+Thiel-Sen slopes are all zero, presumably because most observations are
+non-detects, and so pairwise slopes between points are mostly also zero. Since 
+we are looking at a median of those slopes, we end up at zero.
+
+## Log Linear Model
+```{r loglinear_trend}
+trend_lm <- lm(log(Bacteria2) ~ Beach * Year, data = trend_data)
+anova(trend_lm)
+```
+
+```{r}
+summary(trend_lm)
+```
+
+```{r}
+year_trends <- emtrends(trend_lm, ~ Beach, var = "Year")
+year_trends
+```
+
+## Gamma GLM
+```{r gamma_trend_glm}
+trend_glm <- glm(log(Bacteria2) ~ Beach * Year, 
+                 family = Gamma(),
+                 data = trend_data)
+anova(trend_glm, test = 'LRT')
+```
+
+```{r}
+summary(trend_glm)
+```
+
+```{r}
+year_trends <- emtrends(trend_glm, ~ Beach, var = "Year")
+year_trends
+```
+Note that the linear predictor here is the inverse, which means positive 
+predictors suggest the inverse is increasing, so the response must be 
+declining, although not significantly so here.
+
+So, our conclusions are again robust -- we do not see evidence of changes in
+levels of bacteria observed at either beach.
+
+## Binomial GLM
+```{r binomial_trend_glm}
+exceeds_trend_glm <- glm(Exceeds ~ Beach * Year, family = 'binomial', 
+                   data = trend_data)
+anova(exceeds_trend_glm, test = 'LRT')
+```
+
+We again see no evidence for a trend.
+
+## Conclusions
+We have no evidence for trends over the full record, but we should report that
+result with appropriate humility.  We noted some apparently statistically
+significant trends when analyzing different subsets of the data. Those may 
+result from inadvertent "cherry picking" of the data, or because of short-term 
+observable trends.  Also, we lack good, consistently controlled predictors for
+the entire period of record, as some methods changed 
+
+
+
