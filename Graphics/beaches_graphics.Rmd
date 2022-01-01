@@ -36,18 +36,18 @@ correlated, but are not directly comparable because of different methods.
 
 **All graphics here treat non-detects as equal to the Reporting Limit!**
 
-We generally prefer to replace non-detects with an estimate of what
-"would have been observed" if the methods were more sensitive.  One can generate 
-such estimates (more correctly, expected values of such estimates) based on 
-certain statistical assumptions.  While those assumptions can be called into
-question, such methods are usually preferable to ignoring non-detects, 
-assuming they represent "the value of"true" measurements of zero, or making 
-other *ad hoc* assumptions.
+We generally prefer to replace non-detects with an estimate of what "would have
+been observed" if the methods were more sensitive.  One can generate such
+estimates (more correctly, expected values of such estimates) based on certain
+statistical assumptions.  While those assumptions can be called into question,
+such methods are usually preferable to ignoring non-detects, assuming they
+represent the value of "true" measurements of zero, or making other *ad hoc*
+assumptions.
 
 Unfortunately, we could not use statistical methods to correct for non-detects
 with the data on bacteria levels at shellfish growing areas.  For technical
 reasons, some of the statistical methods we used to analyze the shellfish
-data do not work with data that replaces non-detects wit hmaximum likelihood
+data do not work with data that replaces non-detects with maximum likelihood
 estimates of the (expected value of) the unobserved values.
 
 For consistency in presentation in the State of Casco Bay Report, all GRAPHICS 
@@ -58,7 +58,8 @@ has only modest effect on many summary statistics. However it does alter
 values of low quantiles and geometric means.
 
 Most statistical testing for the Beaches data are based on data that replaces
-non-detects with maximum likelihood estimators of their conditional means.
+non-detects with maximum likelihood estimators of their conditional means, but
+thoseresults are never directly presented in SoCB.
 
 ## Standards 
 ### Beaches Program
@@ -79,8 +80,6 @@ library(tidyverse)
 library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
 library(emmeans)   # For marginal means
 
-library(mblm)      # for the Thiel-Sen estimators
-
 library(CBEPgraphics)
 load_cbep_fonts()
 theme_set(theme_cbep())
@@ -91,7 +90,7 @@ library(LCensMeans)
 # Data Preparation
 ## Initial Folder References
 ```{r folders}
-sibfldnm    <- 'Derived_Data'
+sibfldnm    <- 'Data'
 parent      <- dirname(getwd())
 sibling     <- file.path(parent,sibfldnm)
 
@@ -134,6 +133,7 @@ beach_data <- beach_data %>%
 ## Add a "Day of the Week" Identifier
 We need this to help evaluate whether samples are "normal" samples or "storm"
 samples.
+
 ```{r add_day}
 beach_data <- beach_data %>%
   mutate(Weekday = weekdays(sdate)) %>%
@@ -152,6 +152,7 @@ GRAPHICS for both BEaches and Shellfish bacteria data are presented showing
 data treating non-detects at the nominal detection limit. For the BEaches data,
 most of the analyses were based on data that substituted ML estimators for the 
 non-detects.
+
 ```{r estimate_non_detects}
 beach_data <- beach_data %>%
   mutate(Bacteria2 = sub_cmeans(Bacteria, Censored_Flag) )
@@ -164,56 +165,10 @@ beach_data <- beach_data %>%
   relocate(Exceeds, .after = Censored_Flag)
 ```
 
-# Recent Status
-## Based on Non-detects at Reporting Limit
+## Restrict to Recent Conditions
 ```{r summary_table}
 recent_data <- beach_data %>%
   filter(Year > 2015)
-```
-
-```{r}
-recent_data %>%
-  group_by(SiteCode) %>%
-  summarize( years = length(unique(Year)),
-             median_Bacteria = median(Bacteria, na.rm = TRUE),
-             gmean_bacteria = exp(mean(log(Bacteria),nas.rm = TRUE)),
-             mean_Bacteria = mean(Bacteria, na.rm = TRUE),
-             n = sum(! is.na(Bacteria)),
-             n_exceeds = sum(Exceeds, na.rm = TRUE),
-             p_exceeds = n_exceeds / n)
-
-```
-
-## Based on Non-detects at Maximum Likelihood Estimator
-Note that the geometric means, in particular, and some means, are substantially
-lower.
-```{r}
-recent_data %>%
-  group_by(SiteCode) %>%
-  summarize( years = length(unique(Year)),
-             median_Bacteria = median(Bacteria2, na.rm = TRUE),
-             gmean_bacteria = exp(mean(log(Bacteria2),nas.rm = TRUE)),
-             mean_Bacteria = mean(Bacteria2, na.rm = TRUE),
-             n = sum(! is.na(Bacteria2)),
-             n_exceeds = sum(Exceeds, na.rm = TRUE),
-             p_exceeds = n_exceeds / n)
-```
-
-Note that the median Bacteria for pretty much all of these stations is at or
-below the lower detection limit. (That is possible because we have replaced
-non-detects by an estimate of the conditional mean expected for unobserved
-censored values).  That means the data is at or below the detection 
-limits more than 50% of the time.
-
-```{r sumamries_different_series}
-cat('\nNon-detects at Detection Limit\n')
-summary(recent_data$Bacteria)
-cat('\nNon-detects at maximum likelihood estimator\n')
-summary(recent_data$Bacteria2)
-cat('\nGeometric Mean\n')
-exp(mean(log(recent_data$Bacteria2)))
-cat('\n\nProbability of Violating Standard\n')
-sum(recent_data$Exceeds) / sum(! is.na(recent_data$Exceeds))
 ```
 
 # Create Geometric Mean Function
@@ -224,34 +179,7 @@ gm_mean <- function(x) {
 ```
 
 # Plots of Recent Condition
-## Dot Plot (Fails....)
-```{r dot_plot, fig.width = 7}
-recent_data %>%
-  ggplot(aes(x = Beach, y = Bacteria, fill = Beach)) +
-  geom_dotplot(binaxis = "y", 
-               stackdir = "centerwhole", 
-               position = "dodge",
-               binpositions = 'all',
-               method = 'histodot',
-               stroke = 0,
-               binwidth = .2) +
-  stat_summary(fun = gm_mean, fill = 'red', shape = 23) +
-  
-  geom_hline(yintercept = 104, color = 'gray25', lty = 2) +
-  
-  scale_y_log10() +
-  scale_fill_manual(values = cbep_colors()) +
-
-    theme(axis.text.x = element_text(angle = 45, size = 9, hjust = 1),
-        legend.position = 'none') +
-
-  ylab('Enterococci (MPN / 100ml)') +
-  xlab('') 
-
-  #geom_bar(data = plain_emms, mapping = aes(Beach, response))
-```
-
-## Jitter Plot
+## Jitter Plot of Recent Conditions
 ```{r jitter_bare, fig.width = 5, fig.height = 4}
 jitter_plt <- recent_data %>%
   ggplot(aes(x = Beach, y = Bacteria)) +
@@ -279,6 +207,7 @@ jitter_plt <- recent_data %>%
 ### Add Geometric Means
 This looks like the geometric means annotation are not properly lined up, but
 it is lined up better in the PDF version, which is what counts.
+
 ```{r jitter_w_geom_mean, fig.width = 5, fig.height = 4}
 xanchor <- 3.75
 yanchor <- 2200
@@ -298,18 +227,23 @@ jitter_plt +
   geom_hline(yintercept = 104, color = 'gray25', lty = 2) +
   #geom_hline(yintercept = 8, color = 'gray25', lty = 2) +
   
-  annotate('text', x = 0, y  = 130, label = '104 MPN', size = 2.5, hjust = 0) +
-  #annotate('text', x = 0, y = 6, label = 'Chronic = 8', size = 2.5, hjust = 0) 
+  annotate('text', x = 0, y  = 130, label = '104 MPN', 
+           size = 2.5, hjust = 0) +
+  annotate('text', x = 3.33, y = 2355, label = 'Geometric Mean', 
+           size = 3.5, hjust = 0) +
+  annotate('point', x = 3.01, y = 2355, shape = 22, fill = 'red')
 
-ggsave('figures/recent_conditons_jitter.pdf', device = cairo_pdf, 
+ggsave('figures/recent_conditons_jitter_revised.pdf', device = cairo_pdf, 
        width = 5, height = 4)
 ```
+
 
 ## Violin Plot with Jitter
 The challenge here is that if we make width proportional to number of 
 observations, the large number of observations and non-detect at Stover's Point 
 dominates.  So we make all sites equal width , and show dots to signal sample
 size.
+
 ```{r violin_start, fig.width = 5, fig.height = 4}
 violin_plt <- recent_data %>%
   ggplot(aes(x = Beach, y = Bacteria)) +
@@ -446,12 +380,7 @@ plt2 <- plt +
 ### Add Geometric Means
 ```{r boxplot_final, fig.width = 5, fig.height = 4}
 plt2 + 
-   stat_summary(fun = gm_mean, shape = 23, fill = 'gray85') +
-
-# annotate('point', x= xanchor, y = yanchor * (4/9),
-#             size = 3, pch = 22, fill = 'red') +
-# annotate('text', x= xanchor + 0.2, y = yanchor * (4/9),
-#            hjust = 0, size = 3, label = 'geometric mean')
+   stat_summary(fun = gm_mean, shape = 23, fill = 'gray85')
 
 ggsave('figures/recent_conditons_jitter_box.pdf', device = cairo_pdf, 
        width = 5, height = 4)

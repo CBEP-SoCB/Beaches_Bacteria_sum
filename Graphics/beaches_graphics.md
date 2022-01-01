@@ -21,15 +21,11 @@ Curtis C. Bohlen, Casco Bay Estuary Partnership.
     -   [Add Maximum Likelihood Estimate for
         Non-detects](#add-maximum-likelihood-estimate-for-non-detects)
     -   [Calculate Exceedences](#calculate-exceedences)
--   [Recent Status](#recent-status)
-    -   [Based on Non-detects at Reporting
-        Limit](#based-on-non-detects-at-reporting-limit)
-    -   [Based on Non-detects at Maximum Likelihood
-        Estimator](#based-on-non-detects-at-maximum-likelihood-estimator)
+    -   [Restrict to Recent Conditions](#restrict-to-recent-conditions)
 -   [Create Geometric Mean Function](#create-geometric-mean-function)
 -   [Plots of Recent Condition](#plots-of-recent-condition)
-    -   [Dot Plot (Fails….)](#dot-plot-fails)
-    -   [Jitter Plot](#jitter-plot)
+    -   [Jitter Plot of Recent
+        Conditions](#jitter-plot-of-recent-conditions)
         -   [Add Geometric Means](#add-geometric-means)
         -   [Add Annotations](#add-annotations)
     -   [Violin Plot with Jitter](#violin-plot-with-jitter)
@@ -70,14 +66,14 @@ We generally prefer to replace non-detects with an estimate of what
 generate such estimates (more correctly, expected values of such
 estimates) based on certain statistical assumptions. While those
 assumptions can be called into question, such methods are usually
-preferable to ignoring non-detects, assuming they represent “the value
-of”true" measurements of zero, or making other *ad hoc* assumptions.
+preferable to ignoring non-detects, assuming they represent the value of
+“true” measurements of zero, or making other *ad hoc* assumptions.
 
 Unfortunately, we could not use statistical methods to correct for
 non-detects with the data on bacteria levels at shellfish growing areas.
 For technical reasons, some of the statistical methods we used to
 analyze the shellfish data do not work with data that replaces
-non-detects wit hmaximum likelihood estimates of the (expected value of)
+non-detects with maximum likelihood estimates of the (expected value of)
 the unobserved values.
 
 For consistency in presentation in the State of Casco Bay Report, all
@@ -90,7 +86,8 @@ means.
 
 Most statistical testing for the Beaches data are based on data that
 replaces non-detects with maximum likelihood estimators of their
-conditional means.
+conditional means, but thoseresults are never directly presented in
+SoCB.
 
 ## Standards
 
@@ -114,34 +111,25 @@ library(fitdistrplus)
 #> Loading required package: MASS
 #> Loading required package: survival
 library(tidyverse)
-#> Warning: package 'tidyverse' was built under R version 4.0.5
 #> -- Attaching packages --------------------------------------- tidyverse 1.3.1 --
-#> v ggplot2 3.3.3     v purrr   0.3.4
-#> v tibble  3.1.2     v dplyr   1.0.6
-#> v tidyr   1.1.3     v stringr 1.4.0
-#> v readr   1.4.0     v forcats 0.5.1
-#> Warning: package 'tidyr' was built under R version 4.0.5
-#> Warning: package 'dplyr' was built under R version 4.0.5
-#> Warning: package 'forcats' was built under R version 4.0.5
+#> v ggplot2 3.3.5     v purrr   0.3.4
+#> v tibble  3.1.6     v dplyr   1.0.7
+#> v tidyr   1.1.4     v stringr 1.4.0
+#> v readr   2.1.1     v forcats 0.5.1
 #> -- Conflicts ------------------------------------------ tidyverse_conflicts() --
 #> x dplyr::filter() masks stats::filter()
 #> x dplyr::lag()    masks stats::lag()
 #> x dplyr::select() masks MASS::select()
 
-# library(GGally)
-
 library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
-#> Warning: package 'mgcv' was built under R version 4.0.5
 #> Loading required package: nlme
 #> 
 #> Attaching package: 'nlme'
 #> The following object is masked from 'package:dplyr':
 #> 
 #>     collapse
-#> This is mgcv 1.8-35. For overview type 'help("mgcv-package")'.
+#> This is mgcv 1.8-38. For overview type 'help("mgcv-package")'.
 library(emmeans)   # For marginal means
-
-library(mblm)      # for the Thiel-Sen estimators
 
 library(CBEPgraphics)
 load_cbep_fonts()
@@ -155,7 +143,7 @@ library(LCensMeans)
 ## Initial Folder References
 
 ``` r
-sibfldnm    <- 'Derived_Data'
+sibfldnm    <- 'Data'
 parent      <- dirname(getwd())
 sibling     <- file.path(parent,sibfldnm)
 
@@ -168,25 +156,17 @@ dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
 ``` r
 fn <- "beaches_data.csv"
 beach_data <- read_csv(file.path(sibling, fn))
-#> 
+#> Rows: 1895 Columns: 24
 #> -- Column specification --------------------------------------------------------
-#> cols(
-#>   .default = col_double(),
-#>   SiteCode = col_character(),
-#>   sdatetime = col_datetime(format = ""),
-#>   sdate = col_date(format = ""),
-#>   Sample_ID = col_character(),
-#>   Sample_Qualifier = col_character(),
-#>   Lab_Qualifier = col_character(),
-#>   Censored_Flag = col_logical(),
-#>   Weather = col_character(),
-#>   Past24HR_Weather = col_character(),
-#>   Past48HR_Weather = col_character(),
-#>   Tide_Stage = col_logical(),
-#>   Water_Surface = col_character(),
-#>   Current = col_logical()
-#> )
-#> i Use `spec()` for the full column specifications.
+#> Delimiter: ","
+#> chr   (8): SiteCode, Sample_ID, Sample_Qualifier, Lab_Qualifier, Weather, Pa...
+#> dbl  (11): Year, Month, DOY, Enterococci, Reporting_Limit, Bacteria, Rain24,...
+#> lgl   (3): Censored_Flag, Tide_Stage, Current
+#> dttm  (1): sdatetime
+#> date  (1): sdate
+#> 
+#> i Use `spec()` to retrieve the full column specification for this data.
+#> i Specify the column types or set `show_col_types = FALSE` to quiet this message.
 ```
 
 ## Add a “Beach” Identifier
@@ -256,94 +236,11 @@ beach_data <- beach_data %>%
   relocate(Exceeds, .after = Censored_Flag)
 ```
 
-# Recent Status
-
-## Based on Non-detects at Reporting Limit
+## Restrict to Recent Conditions
 
 ``` r
 recent_data <- beach_data %>%
   filter(Year > 2015)
-```
-
-``` r
-recent_data %>%
-  group_by(SiteCode) %>%
-  summarize( years = length(unique(Year)),
-             median_Bacteria = median(Bacteria, na.rm = TRUE),
-             gmean_bacteria = exp(mean(log(Bacteria),nas.rm = TRUE)),
-             mean_Bacteria = mean(Bacteria, na.rm = TRUE),
-             n = sum(! is.na(Bacteria)),
-             n_exceeds = sum(Exceeds, na.rm = TRUE),
-             p_exceeds = n_exceeds / n)
-#> # A tibble: 6 x 8
-#>   SiteCode years median_Bacteria gmean_bacteria mean_Bacteria     n n_exceeds
-#>   <chr>    <int>           <dbl>          <dbl>         <dbl> <int>     <int>
-#> 1 BC-1         4              10           13.7          40.8    51         2
-#> 2 EEB-01       4              10           16.0          39.4   103         8
-#> 3 HARP-1       2              10           10            10      25         0
-#> 4 HARP-2       2              10           14.7          22.7    26         1
-#> 5 HARP-3       2              20           23.7          43.9    26         4
-#> 6 WIL-02       4              10           21.9         246.    105         9
-#> # ... with 1 more variable: p_exceeds <dbl>
-```
-
-## Based on Non-detects at Maximum Likelihood Estimator
-
-Note that the geometric means, in particular, and some means, are
-substantially lower.
-
-``` r
-recent_data %>%
-  group_by(SiteCode) %>%
-  summarize( years = length(unique(Year)),
-             median_Bacteria = median(Bacteria2, na.rm = TRUE),
-             gmean_bacteria = exp(mean(log(Bacteria2),nas.rm = TRUE)),
-             mean_Bacteria = mean(Bacteria2, na.rm = TRUE),
-             n = sum(! is.na(Bacteria2)),
-             n_exceeds = sum(Exceeds, na.rm = TRUE),
-             p_exceeds = n_exceeds / n)
-#> # A tibble: 6 x 8
-#>   SiteCode years median_Bacteria gmean_bacteria mean_Bacteria     n n_exceeds
-#>   <chr>    <int>           <dbl>          <dbl>         <dbl> <int>     <int>
-#> 1 BC-1         4            3.56           7.45         37.1     51         2
-#> 2 EEB-01       4           10              9.47         36.1    103         8
-#> 3 HARP-1       2            3.46           3.93          4.24    25         0
-#> 4 HARP-2       2            3.53           7.32         18.4     26         1
-#> 5 HARP-3       2           20             17.0          41.9     26         4
-#> 6 WIL-02       4           10             14.8         244.     105         9
-#> # ... with 1 more variable: p_exceeds <dbl>
-```
-
-Note that the median Bacteria for pretty much all of these stations is
-at or below the lower detection limit. (That is possible because we have
-replaced non-detects by an estimate of the conditional mean expected for
-unobserved censored values). That means the data is at or below the
-detection limits more than 50% of the time.
-
-``` r
-cat('\nNon-detects at Detection Limit\n')
-#> 
-#> Non-detects at Detection Limit
-summary(recent_data$Bacteria)
-#>    Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
-#>    10.0    10.0    10.0   101.1    20.0 15531.0
-cat('\nNon-detects at maximum likelihood estimator\n')
-#> 
-#> Non-detects at maximum likelihood estimator
-summary(recent_data$Bacteria2)
-#>      Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
-#>     3.219     3.453    10.000    97.868    20.000 15531.000
-cat('\nGeometric Mean\n')
-#> 
-#> Geometric Mean
-exp(mean(log(recent_data$Bacteria2)))
-#> [1] 10.09802
-cat('\n\nProbability of Violating Standard\n')
-#> 
-#> 
-#> Probability of Violating Standard
-sum(recent_data$Exceeds) / sum(! is.na(recent_data$Exceeds))
-#> [1] 0.07142857
 ```
 
 # Create Geometric Mean Function
@@ -356,40 +253,7 @@ gm_mean <- function(x) {
 
 # Plots of Recent Condition
 
-## Dot Plot (Fails….)
-
-``` r
-recent_data %>%
-  ggplot(aes(x = Beach, y = Bacteria, fill = Beach)) +
-  geom_dotplot(binaxis = "y", 
-               stackdir = "centerwhole", 
-               position = "dodge",
-               binpositions = 'all',
-               method = 'histodot',
-               stroke = 0,
-               binwidth = .2) +
-  stat_summary(fun = gm_mean, fill = 'red', shape = 23) +
-  
-  geom_hline(yintercept = 104, color = 'gray25', lty = 2) +
-  
-  scale_y_log10() +
-  scale_fill_manual(values = cbep_colors()) +
-
-    theme(axis.text.x = element_text(angle = 45, size = 9, hjust = 1),
-        legend.position = 'none') +
-
-  ylab('Enterococci (MPN / 100ml)') +
-  xlab('') 
-#> Warning: Removed 6 rows containing missing values (geom_segment).
-```
-
-<img src="beaches_graphics_files/figure-gfm/dot_plot-1.png" style="display: block; margin: auto;" />
-
-``` r
-  #geom_bar(data = plain_emms, mapping = aes(Beach, response))
-```
-
-## Jitter Plot
+## Jitter Plot of Recent Conditions
 
 ``` r
 jitter_plt <- recent_data %>%
@@ -440,17 +304,21 @@ jitter_plt +
   geom_hline(yintercept = 104, color = 'gray25', lty = 2) +
   #geom_hline(yintercept = 8, color = 'gray25', lty = 2) +
   
-  annotate('text', x = 0, y  = 130, label = '104 MPN', size = 2.5, hjust = 0) +
-  #annotate('text', x = 0, y = 6, label = 'Chronic = 8', size = 2.5, hjust = 0) 
-
-ggsave('figures/recent_conditons_jitter.pdf', device = cairo_pdf, 
-       width = 5, height = 4)
-#> Warning: Removed 6 rows containing missing values (geom_segment).
-
+  annotate('text', x = 0, y  = 130, label = '104 MPN', 
+           size = 2.5, hjust = 0) +
+  annotate('text', x = 3.33, y = 2355, label = 'Geometric Mean', 
+           size = 3.5, hjust = 0) +
+  annotate('point', x = 3.01, y = 2355, shape = 22, fill = 'red')
 #> Warning: Removed 6 rows containing missing values (geom_segment).
 ```
 
 <img src="beaches_graphics_files/figure-gfm/jitter_all-1.png" style="display: block; margin: auto;" />
+
+``` r
+ggsave('figures/recent_conditons_jitter_revised.pdf', device = cairo_pdf, 
+       width = 5, height = 4)
+#> Warning: Removed 6 rows containing missing values (geom_segment).
+```
 
 ## Violin Plot with Jitter
 
@@ -611,21 +479,17 @@ plt2 <- plt +
 
 ``` r
 plt2 + 
-   stat_summary(fun = gm_mean, shape = 23, fill = 'gray85') +
-
-# annotate('point', x= xanchor, y = yanchor * (4/9),
-#             size = 3, pch = 22, fill = 'red') +
-# annotate('text', x= xanchor + 0.2, y = yanchor * (4/9),
-#            hjust = 0, size = 3, label = 'geometric mean')
-
-ggsave('figures/recent_conditons_jitter_box.pdf', device = cairo_pdf, 
-       width = 5, height = 4)
-#> Warning: Removed 6 rows containing missing values (geom_segment).
-
+   stat_summary(fun = gm_mean, shape = 23, fill = 'gray85')
 #> Warning: Removed 6 rows containing missing values (geom_segment).
 ```
 
 <img src="beaches_graphics_files/figure-gfm/boxplot_final-1.png" style="display: block; margin: auto;" />
+
+``` r
+ggsave('figures/recent_conditons_jitter_box.pdf', device = cairo_pdf, 
+       width = 5, height = 4)
+#> Warning: Removed 6 rows containing missing values (geom_segment).
+```
 
 # Trend Graphics
 
