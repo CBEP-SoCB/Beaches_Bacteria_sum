@@ -18,9 +18,6 @@ knitr::opts_chunk$set(fig.align = 'center',
                       collapse = TRUE, comment = "#>")
 ```
 
-# Introduction
-To be added....
-
 ## Standards
 104 CFU / 100 ml, for individual observations.
 
@@ -28,8 +25,6 @@ To be added....
 ```{r import_libraries}
 library(fitdistrplus)
 library(tidyverse)
-
-# library(GGally)
 
 library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
 library(emmeans)   # For marginal means
@@ -44,12 +39,9 @@ library(LCensMeans)
 # Data Preparation
 ## Initial Folder References
 ```{r folders}
-sibfldnm    <- 'Derived_Data'
+sibfldnm    <- 'Data'
 parent      <- dirname(getwd())
 sibling     <- file.path(parent,sibfldnm)
-
-#dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
-#dir.create(file.path(getwd(), 'models'),  showWarnings = FALSE)
 ```
 
 ## Load Data
@@ -90,7 +82,6 @@ beach_data <- beach_data %>%
   relocate(Weekday, .after = Month)
 ```
 
-
 ## Normal and Conditional Samples
 The Beaches program principally collects samples from each beach on specific
 days of the week.  Samples collected on other days may be "non-standard" 
@@ -128,10 +119,11 @@ Beach                      | Years          | Principal Days of the Week
  Winslow Park              | 2012 - 2013    | Monday, Wednesday (?)  
  Winslow Park              | 2014 - 2015    | Monday  
 
-### Add The Indicator
+### Add The Indicator for "Normal" Samples
 We create a `FALSE` variable, and then go through site by site, flipping the 
 value to `TRUE` when appropriate.  This code may not be appropriate for
 future data sets, as it is tailored to the exceptions in the current record.
+
 ```{r add_normal}
 beach_data <- beach_data %>%
   mutate(normal_flag = FALSE,
@@ -174,11 +166,11 @@ This uses our `LCensMeans` package, and estimates a maximum likelihood estimate
 of the expected value of the (unobserved) left censored values.  It relies
 on several assumption that are questionable for these data, but it is arguably
 better than using the detection limit or half the detection limit.
+
 ```{r handle_non-detects}
 beach_data <- beach_data %>%
 mutate(Bacteria2 = sub_cmeans(Bacteria, Censored_Flag) )
 ```
-
 
 ## Calculate Exceedences
 ```{r calculate_exceedences}
@@ -202,7 +194,6 @@ recent_data %>%
              n_exceeds = sum(Exceeds, na.rm = TRUE),
              p_exceeds = n_exceeds / n)
 ```
-
 
 ## Analysis of Bacteria MPN Data
 ### Log Linear Models
@@ -234,10 +225,9 @@ AIC(lograin_lm)
 
 Incorporating a rainfall predictor helps address the extreme outliers. Sample
 sizes are moderately large, and model diagnostics show no high leverage points.
-However, there is a moderate remaining remaining relationship between location
-and scale. We should not take the details too seriously. The model based on 
-a log transform of rainfall performs slightly better, but most samples had no 
-recent rainfall.
+However, there is a moderate remaining relationship between location and scale.
+We should not take the details too seriously. The model based on a log transform
+of rainfall performs slightly better, but most samples had no recent rainfall.
 
 ```{r}
 anova(lograin_lm)
@@ -246,6 +236,7 @@ anova(lograin_lm)
 ```{r}
 (emms <- emmeans(lograin_lm, "SiteCode", type = 'response'))
 ```
+
 ```{r plot_lm_log_rain}
 plot(emms) + 
   xlab('Enteroccocci\n(MPN / 100 ml)') +
@@ -253,13 +244,12 @@ plot(emms) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.25))
 ```
 
-
 ### GLM Analysis
-We review a GLMs that can better handle the remaining dependency between means
+We review a GLM that can better handle the remaining dependency between means
 and variances.  The Gamma GLM implies a relationship where the variance scales
-as the square of the mean, while the inverse gaussian implies a relationship
+as the square of the mean, while the inverse Gaussian implies a relationship
 where variance scales linearly with the mean. Our scale-location relationship
-looks close to linear, but in practice the inverse gaussian GLMs performed
+looks close to linear, but in practice the inverse Gaussian GLMs performed
 poorly (based on diagnostic plots).
 
 One issue is that both Gamma and Inverse Gaussian models only permit positive
@@ -267,7 +257,8 @@ values.  Our log transformed data (at least in principle) could include negative
 values, if any of our original observations were below 1.  That did not happen.
 
 Our original data were quasi-count data, with a positive detection limit 
-(usually 10, sometimes 1). We prefer to replace non-detects with an estimate of conditional expected value.  In principal, that that value could be below 1, but
+(usually 10, sometimes 1). We prefer to replace non-detects with an estimate of 
+conditional expected value.  In principal, that that value could be below 1, but
 that was never the case for our recent data, where the lower detection limit did 
 not occur.
 
@@ -281,6 +272,7 @@ gamma_glm <- glm(log(Bacteria) ~ SiteCode + log1p(Rain48),
 ```{r diagnostics_gamma_glm}
 boot::glm.diag.plots(gamma_glm)
 ```
+
 There are a handful of points with high influence, but most have low 
 leverage.  Two or perhaps three points are problematic.  We can look at the
 points individually.
@@ -303,10 +295,10 @@ check that.
 ```{r}
 (emms <- emmeans(gamma_glm, "SiteCode", type = 'response'))
 ```
-The negative lower confidence limits are clearly a problem.  The rank order 
-of predicted values and their approximate values all appear more or less 
-appropriate, but we have little confidence in the model, and its strongest 
-result is that sites do not differ in average bacteria levels.
+
+The rank order of predicted values and their approximate values all appear more
+or less appropriate, but we have little confidence in the model, and its
+strongest result is that sites do not differ in average bacteria levels.
 
 ```{r plot_gamma_glm}
 plot(emms) + 
@@ -346,7 +338,6 @@ anova(exceeds_glm_2, test = 'LRT')
 
 That does not alter our conclusions.
 
-
 # Trend Analysis
 We have trouble conducting trend analysis that includes rainfall information,
 as the way rainfall and weather data were collected changed.
@@ -360,6 +351,7 @@ beach_data %>%
 
 Consistent rain information has been collected since 2008, based on rain in the 
 prior 48 hours.
+
 ```{r filter_trend_data}
 trend_data <- beach_data %>%
   filter(SiteCode == 'WIL-02' | SiteCode == 'EEB-01') %>%
@@ -374,16 +366,22 @@ anova(trend_lm)
 ```
 
 So, when accounting for severity of recent rainfall, there is a marginally 
-significant long term trend.
+significant negative long term trend. If anything, things my be getting slightly 
+better.  There is no evidence here that the trends are different at the two
+beaches.
 
 ```{r summary_}
 summary(trend_lm)
 ```
 
+But the trend looks less significant via the T test implied here.
+
 ```{r}
 year_trends <- emtrends(trend_lm, ~ Beach, var = "Year", cov.reduce = median)
 year_trends
 ```
+
+So, I don't think we want to claim any negative trend.
 
 ```{r plot_lm_trends}
 emmip(trend_lm, Beach ~ Year, variable = 'Year', type = 'response', 
@@ -401,12 +399,13 @@ anova(trend_glm, test = 'LRT')
 ```
 
 Here, we see a statistically significant long term trend, but no differences
-in the trend between the two beaches.  And that "trend is fairly weak, and 
+in the trend between the two beaches.  And that "trend" is fairly weak, and 
 vanishes as you look more closely.
 
 ```{r}
 summary(trend_glm)
 ```
+
 ```{r}
 emtrends(trend_glm, ~ Beach, 
          var = "Year", 
@@ -415,3 +414,10 @@ emtrends(trend_glm, ~ Beach,
 Note that both of those marginal trends are not statistically significant on
 their own.
 
+
+```{r plot_lm_trends_2}
+emmip(trend_lm, Beach ~ Year, variable = 'Year', type = 'response', 
+      cov.reduce = median,
+      at = list(Year = 2008:2019), CIs = TRUE) +
+  theme_cbep()
+```

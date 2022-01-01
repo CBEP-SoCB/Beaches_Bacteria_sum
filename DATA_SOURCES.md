@@ -1,11 +1,6 @@
 # Data Sources
-The excel file "CascoBay_StateOfTheBay_DataRequest 04152020.xlsx" was received
-in an e-mail from Meagan Sims to Curtis Bohlen on 4.17.2020.  The file consists 
-of two tabs, the first provides geospatial data, as latitudes and longitudes, 
-for Casco Bay beaches.
-
-## Metadata
-Complementary metadata for is in "EGAD_LookupTables_Version6.0.xlsx"
+Data was shared with CBEP by staff at the Maine Beaches Program early
+in 2020.
 
 ## Alternative Source of Data
 Most of the data is also available from the 

@@ -3,8 +3,7 @@ Impact of Rainfall on Bacteria Levels at Casco Bay Beaches
 Curtis C. Bohlen, Casco Bay Estuary Partnership.
 01/23/2021
 
--   [Introduction](#introduction)
-    -   [Standards](#standards)
+-   [Standards](#standards)
 -   [Import Libraries](#import-libraries)
 -   [Data Preparation](#data-preparation)
     -   [Initial Folder References](#initial-folder-references)
@@ -15,7 +14,8 @@ Curtis C. Bohlen, Casco Bay Estuary Partnership.
     -   [Normal and Conditional
         Samples](#normal-and-conditional-samples)
         -   [Results](#results)
-        -   [Add The Indicator](#add-the-indicator)
+        -   [Add The Indicator for “Normal”
+            Samples](#add-the-indicator-for-normal-samples)
     -   [Add Maximum Likelihood Estimate for
         non-detects](#add-maximum-likelihood-estimate-for-non-detects)
     -   [Calculate Exceedences](#calculate-exceedences)
@@ -32,10 +32,6 @@ Curtis C. Bohlen, Casco Bay Estuary Partnership.
     src="https://www.cascobayestuary.org/wp-content/uploads/2014/04/logo_sm.jpg"
     style="position:absolute;top:10px;right:50px;" />
 
-# Introduction
-
-To be added….
-
 ## Standards
 
 104 CFU / 100 ml, for individual observations.
@@ -44,29 +40,20 @@ To be added….
 
 ``` r
 library(fitdistrplus)
-#> Warning: package 'fitdistrplus' was built under R version 4.0.5
 #> Loading required package: MASS
 #> Loading required package: survival
 library(tidyverse)
-#> Warning: package 'tidyverse' was built under R version 4.0.5
 #> -- Attaching packages --------------------------------------- tidyverse 1.3.1 --
 #> v ggplot2 3.3.5     v purrr   0.3.4
 #> v tibble  3.1.6     v dplyr   1.0.7
 #> v tidyr   1.1.4     v stringr 1.4.0
-#> v readr   2.1.0     v forcats 0.5.1
-#> Warning: package 'ggplot2' was built under R version 4.0.5
-#> Warning: package 'tidyr' was built under R version 4.0.5
-#> Warning: package 'dplyr' was built under R version 4.0.5
-#> Warning: package 'forcats' was built under R version 4.0.5
+#> v readr   2.1.1     v forcats 0.5.1
 #> -- Conflicts ------------------------------------------ tidyverse_conflicts() --
 #> x dplyr::filter() masks stats::filter()
 #> x dplyr::lag()    masks stats::lag()
 #> x dplyr::select() masks MASS::select()
 
-# library(GGally)
-
 library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
-#> Warning: package 'mgcv' was built under R version 4.0.5
 #> Loading required package: nlme
 #> 
 #> Attaching package: 'nlme'
@@ -75,7 +62,6 @@ library(mgcv)      # For GAMs and GAMMs; used here for seasonal smoothers
 #>     collapse
 #> This is mgcv 1.8-38. For overview type 'help("mgcv-package")'.
 library(emmeans)   # For marginal means
-#> Warning: package 'emmeans' was built under R version 4.0.5
 
 library(CBEPgraphics)
 load_cbep_fonts()
@@ -89,12 +75,9 @@ library(LCensMeans)
 ## Initial Folder References
 
 ``` r
-sibfldnm    <- 'Derived_Data'
+sibfldnm    <- 'Data'
 parent      <- dirname(getwd())
 sibling     <- file.path(parent,sibfldnm)
-
-#dir.create(file.path(getwd(), 'figures'), showWarnings = FALSE)
-#dir.create(file.path(getwd(), 'models'),  showWarnings = FALSE)
 ```
 
 ## Load Data
@@ -369,7 +352,7 @@ dow
 | Winslow Park             | 2012 - 2013    | Monday, Wednesday (?)      |
 | Winslow Park             | 2014 - 2015    | Monday                     |
 
-### Add The Indicator
+### Add The Indicator for “Normal” Samples
 
 We create a `FALSE` variable, and then go through site by site, flipping
 the value to `TRUE` when appropriate. This code may not be appropriate
@@ -452,12 +435,12 @@ recent_data %>%
 #> # A tibble: 6 x 8
 #>   SiteCode years median_Bacteria gmean_bacteria mean_Bacteria     n n_exceeds
 #>   <chr>    <int>           <dbl>          <dbl>         <dbl> <int>     <int>
-#> 1 BC-1         4            3.55           7.45         37.1     51         2
-#> 2 EEB-01       4           10              9.44         36.1    103         8
-#> 3 HARP-1       2            3.46           3.90          4.22    25         0
-#> 4 HARP-2       2            3.47           7.32         18.4     26         1
-#> 5 HARP-3       2           20             17.0          41.9     26         4
-#> 6 WIL-02       4           10             14.9         244.     105         9
+#> 1 BC-1         4            3.58           7.46         37.1     51         2
+#> 2 EEB-01       4           10              9.39         36.1    103         8
+#> 3 HARP-1       2            3.42           3.89          4.21    25         0
+#> 4 HARP-2       2            3.49           7.29         18.4     26         1
+#> 5 HARP-3       2           20             17.2          41.9     26         4
+#> 6 WIL-02       4           10             14.8         244.     105         9
 #> # ... with 1 more variable: p_exceeds <dbl>
 ```
 
@@ -505,9 +488,9 @@ AIC(lograin_lm)
 
 Incorporating a rainfall predictor helps address the extreme outliers.
 Sample sizes are moderately large, and model diagnostics show no high
-leverage points. However, there is a moderate remaining remaining
-relationship between location and scale. We should not take the details
-too seriously. The model based on a log transform of rainfall performs
+leverage points. However, there is a moderate remaining relationship
+between location and scale. We should not take the details too
+seriously. The model based on a log transform of rainfall performs
 slightly better, but most samples had no recent rainfall.
 
 ``` r
@@ -548,12 +531,12 @@ plot(emms) +
 
 ### GLM Analysis
 
-We review a GLMs that can better handle the remaining dependency between
+We review a GLM that can better handle the remaining dependency between
 means and variances. The Gamma GLM implies a relationship where the
-variance scales as the square of the mean, while the inverse gaussian
+variance scales as the square of the mean, while the inverse Gaussian
 implies a relationship where variance scales linearly with the mean. Our
 scale-location relationship looks close to linear, but in practice the
-inverse gaussian GLMs performed poorly (based on diagnostic plots).
+inverse Gaussian GLMs performed poorly (based on diagnostic plots).
 
 One issue is that both Gamma and Inverse Gaussian models only permit
 positive values. Our log transformed data (at least in principle) could
@@ -579,6 +562,7 @@ boot::glm.diag.plots(gamma_glm)
 ```
 
 <img src="beaches_rainfall_analysis_files/figure-gfm/diagnostics_gamma_glm-1.png" style="display: block; margin: auto;" />
+
 There are a handful of points with high influence, but most have low
 leverage. Two or perhaps three points are problematic. We can look at
 the points individually.
@@ -619,10 +603,10 @@ rainfall at lower concentrations. We need to check that.
 #> Intervals are back-transformed from the log scale
 ```
 
-The negative lower confidence limits are clearly a problem. The rank
-order of predicted values and their approximate values all appear more
-or less appropriate, but we have little confidence in the model, and its
-strongest result is that sites do not differ in average bacteria levels.
+The rank order of predicted values and their approximate values all
+appear more or less appropriate, but we have little confidence in the
+model, and its strongest result is that sites do not differ in average
+bacteria levels.
 
 ``` r
 plot(emms) + 
@@ -793,7 +777,9 @@ anova(trend_lm)
 ```
 
 So, when accounting for severity of recent rainfall, there is a
-marginally significant long term trend.
+marginally significant negative long term trend. If anything, things my
+be getting slightly better. There is no evidence here that the trends
+are different at the two beaches.
 
 ``` r
 summary(trend_lm)
@@ -821,6 +807,8 @@ summary(trend_lm)
 #> F-statistic:  52.3 on 4 and 708 DF,  p-value: < 2.2e-16
 ```
 
+But the trend looks less significant via the T test implied here.
+
 ``` r
 year_trends <- emtrends(trend_lm, ~ Beach, var = "Year", cov.reduce = median)
 year_trends
@@ -830,6 +818,8 @@ year_trends
 #> 
 #> Confidence level used: 0.95
 ```
+
+So, I don’t think we want to claim any negative trend.
 
 ``` r
 emmip(trend_lm, Beach ~ Year, variable = 'Year', type = 'response', 
@@ -857,17 +847,17 @@ anova(trend_glm, test = 'LRT')
 #> 
 #> 
 #>               Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
-#> NULL                            712     225.03              
-#> Beach          1    2.272       711     222.76  0.003997 ** 
-#> Year           1    1.079       710     221.68  0.047312 *  
-#> log1p(Rain48)  1   34.514       709     187.17 < 2.2e-16 ***
-#> Beach:Year     1    0.260       708     186.91  0.330096    
+#> NULL                            712     225.41              
+#> Beach          1    2.270       711     223.14  0.004034 ** 
+#> Year           1    1.113       710     222.03  0.044080 *  
+#> log1p(Rain48)  1   34.453       709     187.58 < 2.2e-16 ***
+#> Beach:Year     1    0.269       708     187.31  0.322123    
 #> ---
 #> Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 ```
 
 Here, we see a statistically significant long term trend, but no
-differences in the trend between the two beaches. And that "trend is
+differences in the trend between the two beaches. And that “trend” is
 fairly weak, and vanishes as you look more closely.
 
 ``` r
@@ -879,24 +869,24 @@ summary(trend_glm)
 #> 
 #> Deviance Residuals: 
 #>      Min        1Q    Median        3Q       Max  
-#> -1.42525  -0.57655  -0.06825   0.28922   1.51352  
+#> -1.45970  -0.57696  -0.06755   0.28961   1.51399  
 #> 
 #> Coefficients:
 #>                          Estimate Std. Error t value Pr(>|t|)    
-#> (Intercept)             -6.235235   5.724475  -1.089    0.276    
-#> BeachWillard Beach       7.882025   8.156443   0.966    0.334    
-#> Year                     0.003315   0.002844   1.166    0.244    
-#> log1p(Rain48)           -0.167953   0.012055 -13.932   <2e-16 ***
-#> BeachWillard Beach:Year -0.003941   0.004052  -0.973    0.331    
+#> (Intercept)             -6.435257   5.730249  -1.123    0.262    
+#> BeachWillard Beach       8.020792   8.163678   0.982    0.326    
+#> Year                     0.003414   0.002847   1.199    0.231    
+#> log1p(Rain48)           -0.167855   0.012072 -13.904   <2e-16 ***
+#> BeachWillard Beach:Year -0.004010   0.004055  -0.989    0.323    
 #> ---
 #> Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 #> 
-#> (Dispersion parameter for Gamma family taken to be 0.2741791)
+#> (Dispersion parameter for Gamma family taken to be 0.2745227)
 #> 
-#>     Null deviance: 225.03  on 712  degrees of freedom
-#> Residual deviance: 186.91  on 708  degrees of freedom
+#>     Null deviance: 225.41  on 712  degrees of freedom
+#> Residual deviance: 187.31  on 708  degrees of freedom
 #>   (17 observations deleted due to missingness)
-#> AIC: 2333.3
+#> AIC: 2334.1
 #> 
 #> Number of Fisher Scoring iterations: 5
 ```
@@ -906,8 +896,8 @@ emtrends(trend_glm, ~ Beach,
          var = "Year", 
          at = list(Rain48 = 0))
 #>  Beach          Year.trend      SE  df asymp.LCL asymp.UCL
-#>  East End Beach   0.003315 0.00284 Inf  -0.00226   0.00889
-#>  Willard Beach   -0.000626 0.00293 Inf  -0.00637   0.00512
+#>  East End Beach   0.003414 0.00285 Inf  -0.00217   0.00899
+#>  Willard Beach   -0.000596 0.00293 Inf  -0.00635   0.00516
 #> 
 #> Results are given on the log (not the response) scale. 
 #> Confidence level used: 0.95
@@ -915,3 +905,12 @@ emtrends(trend_glm, ~ Beach,
 
 Note that both of those marginal trends are not statistically
 significant on their own.
+
+``` r
+emmip(trend_lm, Beach ~ Year, variable = 'Year', type = 'response', 
+      cov.reduce = median,
+      at = list(Year = 2008:2019), CIs = TRUE) +
+  theme_cbep()
+```
+
+<img src="beaches_rainfall_analysis_files/figure-gfm/plot_lm_trends_2-1.png" style="display: block; margin: auto;" />
