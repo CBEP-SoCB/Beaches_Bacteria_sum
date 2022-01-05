@@ -494,7 +494,7 @@ ggsave('figures/recent_conditons_jitter_box.pdf', device = cairo_pdf,
 # Trend Graphics
 
 We only have long term data from two beaches – East End and Willard. And
-trends are not statistically significant at eh single beach level.
+trends are not statistically significant at the single beach level.
 Apparent importance depends on the model uses, which is always
 uncomfortable.
 
